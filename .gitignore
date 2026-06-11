@@ -1,6 +1,9 @@
 # local user settings
 gui/config.json
 
+# vercel
+.vercel/
+
 # python
 __pycache__/
 *.py[cod]

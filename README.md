@@ -10,6 +10,8 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Powered by](https://img.shields.io/badge/AI-Claude%20Code-d97706)
 
+**🌐 Website: [script-index-updater.vercel.app](https://script-index-updater.vercel.app)**
+
 Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports, and it extracts every script tab, identifies the vehicle each script is about (even when it isn't labelled), and appends **only the new entries** to a formatted Word master list.
 
 <div align="center">

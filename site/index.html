@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Script Index Updater — AI-powered script indexing for video creators</title>
+<meta name="description" content="Drop in Google Docs PDF exports of your video scripts and get a clean, deduplicated Word master index — titles and subjects identified by AI.">
+<meta property="og:title" content="Script Index Updater">
+<meta property="og:description" content="AI-powered indexer for video script docs. PDF exports in, deduplicated Word master list out.">
+<meta property="og:image" content="https://script-index-updater.vercel.app/screenshot.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="icon.png">
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --panel2: #0e141c;
+    --line: #1e2936;
+    --txt: #d7e0ea;
+    --dim: #8294a8;
+    --amber: #ffb84d;
+    --amber-deep: #f59e0b;
+    --green: #4ade80;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background:
+      radial-gradient(1400px 600px at 50% -8%, rgba(245,158,11,.09), transparent 60%),
+      linear-gradient(rgba(125,142,161,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(125,142,161,.04) 1px, transparent 1px),
+      var(--bg);
+    background-size: auto, 30px 30px, 30px 30px, auto;
+    color: var(--txt);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+
+  /* nav */
+  nav { display: flex; align-items: center; gap: 12px; padding: 22px 0; }
+  nav img { width: 34px; height: 34px; }
+  nav .name { font-weight: 700; letter-spacing: 2px; font-size: 15px; }
+  nav .name b { color: var(--amber); }
+  nav a.gh {
+    margin-left: auto; color: var(--dim); text-decoration: none; font-size: 13.5px;
+    border: 1px solid var(--line); padding: 7px 14px; border-radius: 999px;
+    transition: all .15s;
+  }
+  nav a.gh:hover { color: var(--amber); border-color: var(--amber); }
+
+  /* hero */
+  .hero { text-align: center; padding: 64px 0 30px; }
+  .hero img.logo { width: 96px; height: 96px; margin-bottom: 22px; }
+  h1 {
+    font-size: clamp(30px, 5vw, 46px); font-weight: 800; letter-spacing: 1px;
+    line-height: 1.15;
+  }
+  h1 .accent { color: var(--amber); }
+  .sub {
+    color: var(--dim); font-size: clamp(15px, 2vw, 18px); max-width: 640px;
+    margin: 18px auto 0;
+  }
+  .cta { display: flex; gap: 14px; justify-content: center; margin-top: 32px; flex-wrap: wrap; }
+  .btn {
+    text-decoration: none; font-weight: 700; letter-spacing: 1px; font-size: 14px;
+    padding: 13px 26px; border-radius: 10px; transition: all .15s;
+  }
+  .btn.primary {
+    color: #1a1205; background: linear-gradient(135deg, var(--amber), var(--amber-deep));
+    box-shadow: 0 4px 24px rgba(245,158,11,.3);
+  }
+  .btn.primary:hover { filter: brightness(1.1); transform: translateY(-2px); }
+  .btn.ghost { color: var(--txt); border: 1px solid var(--line); }
+  .btn.ghost:hover { border-color: var(--amber); color: var(--amber); }
+
+  /* screenshot */
+  .shot { padding: 44px 0 20px; }
+  .shot .frame {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 60px rgba(245,158,11,.07);
+    background: var(--panel2);
+  }
+  .shot img { display: block; width: 100%; }
+
+  /* sections */
+  section { padding: 70px 0 10px; }
+  .kicker {
+    color: var(--amber); font-size: 12px; letter-spacing: 3px; font-weight: 700;
+    text-transform: uppercase; margin-bottom: 10px;
+  }
+  h2 { font-size: clamp(22px, 3.4vw, 30px); font-weight: 800; margin-bottom: 8px; }
+  .lead { color: var(--dim); max-width: 660px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 34px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+    border: 1px solid var(--line); border-radius: 14px; padding: 22px;
+  }
+  .card .ic {
+    width: 40px; height: 40px; border-radius: 10px; display: flex;
+    align-items: center; justify-content: center; font-size: 19px;
+    background: rgba(245,158,11,.12); color: var(--amber); margin-bottom: 14px;
+  }
+  .card h3 { font-size: 16px; margin-bottom: 7px; }
+  .card p { color: var(--dim); font-size: 14px; }
+
+  /* steps */
+  .steps { counter-reset: step; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 34px; }
+  .step { border: 1px solid var(--line); border-radius: 14px; padding: 22px; background: var(--panel2); position: relative; }
+  .step::before {
+    counter-increment: step; content: "0" counter(step);
+    font-size: 13px; font-weight: 800; color: var(--amber); letter-spacing: 2px;
+    display: block; margin-bottom: 10px;
+  }
+  .step h3 { font-size: 15.5px; margin-bottom: 6px; }
+  .step p { color: var(--dim); font-size: 13.5px; }
+
+  /* install */
+  .install-box {
+    margin-top: 30px; background: #0d1219; border: 1px solid var(--line);
+    border-radius: 14px; padding: 24px; font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 14px; overflow-x: auto;
+  }
+  .install-box .c { color: #5b6c80; }
+  .install-box .a { color: var(--amber); }
+  .req { color: var(--dim); font-size: 13.5px; margin-top: 14px; }
+  .req a { color: var(--amber); text-decoration: none; }
+
+  footer {
+    margin-top: 90px; border-top: 1px solid var(--line); padding: 30px 0 40px;
+    display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 13.5px;
+    flex-wrap: wrap;
+  }
+  footer img { width: 22px; height: 22px; }
+  footer a { color: var(--amber); text-decoration: none; }
+  footer .right { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <img src="icon.svg" alt="">
+  <span class="name">SCRIPT <b>INDEX</b> UPDATER</span>
+  <a class="gh" href="https://github.com/TalhaHamdees/script-index-updater">★ View on GitHub</a>
+</nav>
+
+<div class="hero">
+  <img class="logo" src="icon.svg" alt="Script Index Updater logo">
+  <h1>Your script library,<br><span class="accent">indexed by AI.</span></h1>
+  <p class="sub">Drop in Google Docs PDF exports of your video scripts. Get back a clean, deduplicated Word master list — every title and featured subject identified automatically.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/TalhaHamdees/script-index-updater">▶&nbsp; GET IT ON GITHUB</a>
+    <a class="btn ghost" href="#how">How it works</a>
+  </div>
+</div>
+
+<div class="shot">
+  <div class="frame"><img src="screenshot.png" alt="Script Index Updater app — dark mission-control interface with PDF drop zone, master list path, and live mission feed"></div>
+</div>
+
+<section>
+  <div class="kicker">Features</div>
+  <h2>Built for creators with big script docs</h2>
+  <p class="lead">Made for YouTube channels that write scripts in a Google Doc with dozens of tabs — and need the catalogue to stay current without the busywork.</p>
+  <div class="grid">
+    <div class="card"><div class="ic">◎</div><h3>AI subject identification</h3><p>Scripts without an explicit label are read and classified by Claude running headlessly on your machine. No API key — it uses your Claude Code installation.</p></div>
+    <div class="card"><div class="ic">⊕</div><h3>True incremental updates</h3><p>Entries are matched by normalized title with fuzzy near-miss review. Re-running on an updated export appends only what's new — existing rows are never touched.</p></div>
+    <div class="card"><div class="ic">▤</div><h3>Multi-document runs</h3><p>Queue several PDFs at once. Each is processed in order and deduplicated against entries appended from the previous ones.</p></div>
+    <div class="card"><div class="ic">⚠</div><h3>Export-quirk recovery</h3><p>Detects dropped tab markers, merged scripts, numbering gaps, malformed titles, and non-script tabs — and tells you what to fix in your doc.</p></div>
+    <div class="card"><div class="ic">≡</div><h3>Format-preserving Word output</h3><p>New table rows are cloned from existing ones, so fonts, borders, and column widths stay exactly as designed. New master files bootstrap from a styled template.</p></div>
+    <div class="card"><div class="ic">▣</div><h3>Mission-control GUI</h3><p>A dark, modern desktop app with drag &amp; drop, a live feed of the indexing run, and a rendered mission report at the end.</p></div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="kicker">Workflow</div>
+  <h2>Four steps, zero busywork</h2>
+  <div class="steps">
+    <div class="step"><h3>Export</h3><p>In Google Docs: File → Download → PDF. All your script tabs in one file.</p></div>
+    <div class="step"><h3>Drop</h3><p>Drag the PDF(s) into the app — or onto its desktop icon.</p></div>
+    <div class="step"><h3>Watch</h3><p>The mission feed streams live as scripts are parsed, compared, and classified.</p></div>
+    <div class="step"><h3>Open</h3><p>Your Word master list updates in place — new entries appended, formatting intact.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="kicker">Installation</div>
+  <h2>Up and running in two minutes</h2>
+  <div class="install-box">
+    <div><span class="c"># Requires Windows 10/11, Python 3.10+, and Claude Code</span></div>
+    <div><span class="a">git</span> clone https://github.com/TalhaHamdees/script-index-updater.git</div>
+    <div><span class="a">cd</span> script-index-updater</div>
+    <div><span class="a">pip</span> install -r requirements.txt</div>
+    <div><span class="c"># then double-click launcher.bat</span></div>
+  </div>
+  <p class="req">Needs <a href="https://claude.com/claude-code">Claude Code</a> signed in on your machine — the AI runs locally through it, so there are no API keys to manage.</p>
+</section>
+
+<footer>
+  <img src="icon.svg" alt="">
+  <span>Script Index Updater · MIT License</span>
+  <span class="right">Built by <a href="https://github.com/TalhaHamdees">Talha Hamdees</a> · Powered by <a href="https://claude.com/claude-code">Claude Code</a></span>
+</footer>
+
+</div>
+</body>
+</html>
