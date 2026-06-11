@@ -211,6 +211,75 @@ class Api:
                          daemon=True).start()
         return None
 
+    def start_comments(self, channel, master=""):
+        """Validate and launch a comments-extraction run. Returns error or None."""
+        channel = (channel or "").strip().strip('"')
+        master = (master or "").strip().strip('"')
+        if not channel:
+            return "Enter a YouTube channel URL first."
+        if not re.search(r"(youtube\.com|youtu\.be)/\S", channel, re.I):
+            return f"That doesn't look like a YouTube channel URL: {channel}"
+        if importlib.util.find_spec("yt_dlp") is None:
+            return "Comment extraction needs yt-dlp. Run: pip install yt-dlp"
+        csv_dir = os.path.dirname(master) if master else os.path.expanduser("~")
+        self._cancelled = False
+        self._paused = False
+        threading.Thread(target=self._run_comments_job, args=(channel, csv_dir),
+                         daemon=True).start()
+        return None
+
+    def _run_comments_job(self, channel, csv_dir, max_videos=0):
+        """Stream fetch_comments.py: per-video progress, then the CSV export."""
+        try:
+            script = os.path.normpath(os.path.join(HERE, "..", "scripts",
+                                                   "fetch_comments.py"))
+            cmd = [sys.executable, "-u", script, channel,
+                   self._channel_dir(channel), "--csv-dir", csv_dir]
+            if max_videos:
+                cmd += ["--max", str(max_videos)]
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            self._emit(kind="progress", pct=0, label="Listing channel videos")
+            self._proc = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=flags, env=env)
+            csv_path, summary = "", ""
+            for line in self._proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                m = re.match(r"\[(\d+)/(\d+)\]", line)
+                if m:
+                    n, total = int(m.group(1)), int(m.group(2))
+                    self._emit(kind="progress", pct=round(100 * n / max(total, 1), 1),
+                               label=f"Fetching comments ({n}/{total})")
+                    self._emit(kind="tool", text=line)
+                elif line.startswith("CSV saved: "):
+                    csv_path = line[len("CSV saved: "):].strip()
+                    self._emit(kind="meta", text=line)
+                elif line.startswith("SUMMARY: "):
+                    summary = line[len("SUMMARY: "):].strip()
+                else:
+                    self._emit(kind="meta", text=line)
+            code = self._proc.wait()
+            ok = code == 0 and not self._cancelled and bool(csv_path)
+            if ok:
+                stats = dict(kv.split("=") for kv in summary.split() if "=" in kv)
+                self._emit(kind="progress", pct=100, label="Comments exported")
+                self._emit(kind="output", path=csv_path, label="Open comments file")
+                self._emit(kind="result", text=(
+                    f"## Comments export complete\n\n"
+                    f"- **Videos covered:** {stats.get('videos', '?')} "
+                    f"({stats.get('fetched', '?')} fetched, {stats.get('cached', '?')} cached, "
+                    f"{stats.get('failed', '?')} failed)\n"
+                    f"- **Comments exported:** {stats.get('comments', '?')}\n"
+                    f"- **Saved to:** `{csv_path}`"))
+            self._emit(kind="done", ok=ok, cancelled=self._cancelled)
+        except Exception as e:
+            self._emit(kind="err", text=f"ERROR: {e}")
+            self._emit(kind="done", ok=False, cancelled=self._cancelled)
+
     # ---------- worker ----------
     @staticmethod
     def _channel_dir(url):

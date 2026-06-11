@@ -271,6 +271,11 @@
              placeholder="https://www.youtube.com/@YourChannel">
       <div class="note">Optional — every published video's transcript is downloaded
         (auto-captions when needed) and indexed like a script PDF. Re-runs only fetch new videos.</div>
+      <div class="mrow" style="margin-top:9px">
+        <button class="btn" style="flex:1" onclick="fetchComments()">⬇&nbsp;&nbsp;Fetch all comments</button>
+      </div>
+      <div class="note">Downloads every comment from every video into one CSV
+        (saved next to your master list, named after the channel). Re-runs only fetch new videos.</div>
     </div>
 
     <div class="card">
@@ -372,7 +377,8 @@ async function pickMaster() {
   const res = await pywebview.api.pick_master();
   if (res) $('master').value = res;
 }
-function openMaster() { pywebview.api.open_path($('master').value); }
+let openPath = null;  // set by 'output' events (e.g. comments CSV)
+function openMaster() { pywebview.api.open_path(openPath || $('master').value); }
 
 /* ---------- status / feed ---------- */
 function setStatus(mode, text) {
@@ -418,6 +424,29 @@ async function togglePause() {
 }
 function endTask() { if (running) pywebview.api.cancel(); }
 
+function beginRun(statusText) {
+  openPath = null;
+  $('open-master').textContent = 'Open master list';
+  setRunning(true);
+  $('feed').innerHTML = '';
+  $('result').classList.remove('show');
+  setProgress(0, 'Starting up');
+  setNow('');
+  setStatus('run', statusText);
+}
+
+async function fetchComments() {
+  if (running) return;
+  const channel = $('channel').value.trim();
+  if (!channel) { log('Enter a YouTube channel URL first.', 'err'); return; }
+  const err = await pywebview.api.start_comments(channel, $('master').value.trim());
+  if (err) { log(err, 'err'); return; }
+  beginRun('COMMENTS');
+  log(`Comment extraction queued for ${channel}`, 'meta');
+  log('First run downloads every video\'s comments — this can take a while on big channels.', 'meta');
+  log('─'.repeat(60), 'meta');
+}
+
 async function startTask() {
   if (running) return;
   const channel = $('channel').value.trim();
@@ -428,12 +457,7 @@ async function startTask() {
   const err = await pywebview.api.start(pdfs, master, includeAngle, channel);
   if (err) { log(err, 'err'); return; }
 
-  setRunning(true);
-  $('feed').innerHTML = '';
-  $('result').classList.remove('show');
-  setProgress(0, 'Starting up');
-  setNow('');
-  setStatus('run', 'INDEXING');
+  beginRun('INDEXING');
   const srcs = [];
   if (pdfs.length) srcs.push(`${pdfs.length} document(s)`);
   if (channel) srcs.push('1 channel');
@@ -450,6 +474,7 @@ function onEvent(e) {
   else if (e.kind === 'err') log(e.text, 'err');
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
   else if (e.kind === 'master') $('master').value = e.path;
+  else if (e.kind === 'output') { openPath = e.path; $('open-master').textContent = e.label || 'Open file'; }
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
     setRunning(false);
