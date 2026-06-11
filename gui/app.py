@@ -41,11 +41,13 @@ def default_master():
     return m or os.path.join(os.path.expanduser("~"), "Documents", "Script Index.docx")
 
 
-def remember_settings(master, include_angle, channel=""):
+def remember_settings(**settings):
+    """Merge the given keys into config.json, preserving the others."""
+    cfg = load_config()
+    cfg.update(settings)
     try:
         with open(CONFIG, "w", encoding="utf-8") as f:
-            json.dump({"master": master, "include_angle": include_angle,
-                       "channel": channel}, f, indent=1)
+            json.dump(cfg, f, indent=1)
     except OSError:
         pass
 
@@ -114,9 +116,11 @@ class Api:
 
     # ---------- exposed to JS ----------
     def defaults(self):
+        cfg = load_config()
         return {"master": default_master(),
-                "include_angle": bool(load_config().get("include_angle")),
-                "channel": load_config().get("channel", ""),
+                "include_angle": bool(cfg.get("include_angle")),
+                "comments_top": bool(cfg.get("comments_top")),
+                "channel": cfg.get("channel", ""),
                 "claude": bool(shutil.which("claude")),
                 "initial_pdfs": self._initial_pdfs}
 
@@ -203,7 +207,8 @@ class Api:
         if not claude:
             return "The 'claude' command is not on PATH. Install Claude Code first."
 
-        remember_settings(master, bool(include_angle), channel)
+        remember_settings(master=master, include_angle=bool(include_angle),
+                          channel=channel)
         self._cancelled = False
         self._paused = False
         threading.Thread(target=self._run_job,
@@ -211,7 +216,7 @@ class Api:
                          daemon=True).start()
         return None
 
-    def start_comments(self, channel, master=""):
+    def start_comments(self, channel, master="", top_only=False):
         """Validate and launch a comments-extraction run. Returns error or None."""
         channel = (channel or "").strip().strip('"')
         master = (master or "").strip().strip('"')
@@ -222,19 +227,23 @@ class Api:
         if importlib.util.find_spec("yt_dlp") is None:
             return "Comment extraction needs yt-dlp. Run: pip install yt-dlp"
         csv_dir = os.path.dirname(master) if master else os.path.expanduser("~")
+        remember_settings(channel=channel, comments_top=bool(top_only))
         self._cancelled = False
         self._paused = False
-        threading.Thread(target=self._run_comments_job, args=(channel, csv_dir),
+        threading.Thread(target=self._run_comments_job,
+                         args=(channel, csv_dir, 0, bool(top_only)),
                          daemon=True).start()
         return None
 
-    def _run_comments_job(self, channel, csv_dir, max_videos=0):
+    def _run_comments_job(self, channel, csv_dir, max_videos=0, top_only=False):
         """Stream fetch_comments.py: per-video progress, then the CSV export."""
         try:
             script = os.path.normpath(os.path.join(HERE, "..", "scripts",
                                                    "fetch_comments.py"))
             cmd = [sys.executable, "-u", script, channel,
                    self._channel_dir(channel), "--csv-dir", csv_dir]
+            if top_only:
+                cmd += ["--max-comments", "100"]
             if max_videos:
                 cmd += ["--max", str(max_videos)]
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0

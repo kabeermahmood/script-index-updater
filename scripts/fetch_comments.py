@@ -2,6 +2,7 @@
 
 Usage: python fetch_comments.py <channel_url> <out_dir>
            [--csv-dir DIR] [--max N] [--delay SECS] [--max-comments N]
+           [--workers N]
 
 Enumerates all videos on the channel's Videos tab (numbered oldest-first,
 same as fetch_channel.py), downloads each video's full comment threads
@@ -10,10 +11,13 @@ same as fetch_channel.py), downloads each video's full comment threads
   <out_dir>/comments/<video_id>.json     raw per-video comment dump
   <csv-dir>/<Channel Name> Comments.csv  one spreadsheet with every comment
 
-Per-video dumps are cached on disk, so re-running only fetches comments for
-new videos (the CSV is rebuilt from the cache every run, so it always holds
-the full channel). Videos with comments disabled get an empty dump and are
-counted in the summary. A polite delay separates fetches.
+Videos are fetched by a small pool of parallel workers (--workers, default 3)
+with rate-limit awareness: a 429 from YouTube puts ALL workers on a shared
+exponential-backoff cooldown, and each video is retried up to 3 times before
+being skipped. Per-video dumps are cached on disk, so re-running only fetches
+comments for new videos (the CSV is rebuilt from the cache every run, so it
+always holds the full channel). With --max-comments the cap fetches the TOP
+comments (most relevant first), not the newest.
 
 The CSV is UTF-8 with BOM so Excel opens it correctly. Columns:
 video #, video id, video title, comment id, parent id, reply?, author,
@@ -22,25 +26,61 @@ uploader?, likes, published (UTC), comment text.
 Requires: pip install yt-dlp
 """
 import argparse
+import concurrent.futures
 import csv
 import datetime
 import json
 import os
+import random
 import re
 import sys
+import threading
 import time
 
 from fetch_channel import list_videos, log, normalize_channel_url
 
 KEEP = ("id", "parent", "text", "author", "author_is_uploader",
         "like_count", "timestamp")
+RETRY_WAITS = (10, 30, 90)  # seconds, + jitter
+
+
+class Cooldown:
+    """Shared rate-limit brake: any worker can pause the whole pool."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._until = 0.0
+
+    def wait(self):
+        while True:
+            with self._lock:
+                remaining = self._until - time.time()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 1.0))
+
+    def trigger(self, secs):
+        """Extend the cooldown. Returns True if this call extended it."""
+        with self._lock:
+            target = time.time() + secs
+            if target > self._until:
+                self._until = target
+                return True
+            return False
+
+
+def is_rate_limit(err):
+    msg = str(err).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
 
 def fetch_comments(video_url, max_comments):
     from yt_dlp import YoutubeDL
     eargs = {}
     if max_comments > 0:
-        eargs = {"youtube": {"max_comments": [str(max_comments)]}}
+        # cap = the TOP N comments, not the N newest
+        eargs = {"youtube": {"max_comments": [str(max_comments)],
+                             "comment_sort": ["top"]}}
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
             "getcomments": True, "extractor_args": eargs}
     with YoutubeDL(opts) as ydl:
@@ -86,7 +126,9 @@ def main():
     ap.add_argument("--delay", type=float, default=1.0,
                     help="seconds between fetches")
     ap.add_argument("--max-comments", type=int, default=0,
-                    help="cap comments per video (0 = all)")
+                    help="cap at the top N comments per video (0 = all)")
+    ap.add_argument("--workers", type=int, default=3,
+                    help="parallel fetch workers (default 3)")
     args = ap.parse_args()
 
     try:
@@ -114,32 +156,66 @@ def main():
         numbered = numbered[-args.max:]
         log(f"--max {args.max}: processing the {len(numbered)} most recent video(s)")
 
-    dumps, fetched, cached, failed = [], 0, 0, 0
-    for n, v in numbered:
+    cooldown = Cooldown()
+    progress_lock = threading.Lock()
+    completed = [0]
+    total = len(numbered)
+
+    def bump(title):
+        with progress_lock:
+            completed[0] += 1
+            return f"[{completed[0]}/{total}] {title[:70]}"
+
+    def process(n, v):
+        """Fetch one video's comments (with retries). Returns (status, dump)."""
         jpath = os.path.join(cdir, f"{v['id']}.json")
-        label = f"[{n}/{len(videos)}] {v['title'][:70]}"
         if os.path.exists(jpath):
             with open(jpath, encoding="utf-8") as f:
                 dump = json.load(f)
-            cached += 1
-            log(f"{label} - cached ({len(dump['comments'])} comments)")
-        else:
+            dump["n"] = n  # keep numbering current even for cached dumps
+            log(f"{bump(v['title'])} - cached ({len(dump['comments'])} comments)")
+            return "cached", dump
+        last_err = None
+        for attempt, base_wait in enumerate(RETRY_WAITS):
+            cooldown.wait()
             try:
                 comments = fetch_comments(v["url"], args.max_comments)
+                break
             except Exception as e:
+                last_err = e
+                wait = base_wait + random.uniform(0, 5)
+                if is_rate_limit(e):
+                    if cooldown.trigger(wait):
+                        log(f"Rate limited by YouTube - backing off {int(wait)}s "
+                            f"(attempt {attempt + 1}/{len(RETRY_WAITS)})")
+                else:
+                    time.sleep(wait * 0.3)
+        else:
+            log(f"{bump(v['title'])} - fetch failed after "
+                f"{len(RETRY_WAITS)} attempts: {last_err} - skipped")
+            return "failed", None
+        dump = {"n": n, "video_id": v["id"], "title": v["title"],
+                "url": v["url"], "comments": comments}
+        with open(jpath, "w", encoding="utf-8") as f:
+            json.dump(dump, f, ensure_ascii=False)
+        log(f"{bump(v['title'])} - {len(comments)} comment(s) saved")
+        time.sleep(args.delay)
+        return "fetched", dump
+
+    dumps, fetched, cached, failed = [], 0, 0, 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(args.workers, 1)) as ex:
+        futures = [ex.submit(process, n, v) for n, v in numbered]
+        for fut in concurrent.futures.as_completed(futures):
+            status, dump = fut.result()
+            if status == "fetched":
+                fetched += 1
+            elif status == "cached":
+                cached += 1
+            else:
                 failed += 1
-                log(f"{label} - fetch failed: {e} - skipped")
-                time.sleep(args.delay)
-                continue
-            dump = {"n": n, "video_id": v["id"], "title": v["title"],
-                    "url": v["url"], "comments": comments}
-            with open(jpath, "w", encoding="utf-8") as f:
-                json.dump(dump, f, ensure_ascii=False)
-            fetched += 1
-            log(f"{label} - {len(comments)} comment(s) saved")
-            time.sleep(args.delay)
-        dump["n"] = n  # keep numbering current even for cached dumps
-        dumps.append(dump)
+            if dump:
+                dumps.append(dump)
+    dumps.sort(key=lambda d: d["n"])
 
     total = sum(len(d["comments"]) for d in dumps)
     safe = re.sub(r'[<>:"/\\|?*]', "", channel or "Channel").strip() or "Channel"

@@ -276,6 +276,13 @@
       </div>
       <div class="note">Downloads every comment from every video into one CSV
         (saved next to your master list, named after the channel). Re-runs only fetch new videos.</div>
+      <div class="opt-row" onclick="toggleCommentsTop()">
+        <div class="tswitch" id="tswitch-top"><span class="knob"></span></div>
+        <div>
+          <div class="opt-title">Top 100 comments only</div>
+          <div class="opt-sub">Much faster — fetches each video's 100 most relevant comments instead of every thread.</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -335,6 +342,11 @@ let includeAngle = false;
 function toggleAngle() {
   includeAngle = !includeAngle;
   document.getElementById('tswitch').classList.toggle('on', includeAngle);
+}
+let commentsTop = false;
+function toggleCommentsTop() {
+  commentsTop = !commentsTop;
+  document.getElementById('tswitch-top').classList.toggle('on', commentsTop);
 }
 
 const $ = id => document.getElementById(id);
@@ -439,10 +451,10 @@ async function fetchComments() {
   if (running) return;
   const channel = $('channel').value.trim();
   if (!channel) { log('Enter a YouTube channel URL first.', 'err'); return; }
-  const err = await pywebview.api.start_comments(channel, $('master').value.trim());
+  const err = await pywebview.api.start_comments(channel, $('master').value.trim(), commentsTop);
   if (err) { log(err, 'err'); return; }
   beginRun('COMMENTS');
-  log(`Comment extraction queued for ${channel}`, 'meta');
+  log(`Comment extraction queued for ${channel}${commentsTop ? ' (top 100 per video)' : ' (all comments)'}`, 'meta');
   log('First run downloads every video\'s comments — this can take a while on big channels.', 'meta');
   log('─'.repeat(60), 'meta');
 }
@@ -542,6 +554,7 @@ window.addEventListener('pywebviewready', async () => {
   $('master').value = d.master;
   if (d.channel) $('channel').value = d.channel;
   if (d.include_angle) toggleAngle();
+  if (d.comments_top) toggleCommentsTop();
   if (d.initial_pdfs && d.initial_pdfs.length) addFiles(d.initial_pdfs);
   if (!d.claude) log("WARNING: 'claude' command not found on PATH — install Claude Code first.", 'err');
 });
