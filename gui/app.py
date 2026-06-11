@@ -253,7 +253,7 @@ class Api:
                 cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 errors="replace", creationflags=flags, env=env)
-            csv_path, summary = "", ""
+            json_path, csv_path, summary = "", "", ""
             for line in self._proc.stdout:
                 line = line.rstrip()
                 if not line:
@@ -264,6 +264,9 @@ class Api:
                     self._emit(kind="progress", pct=round(100 * n / max(total, 1), 1),
                                label=f"Fetching comments ({n}/{total})")
                     self._emit(kind="tool", text=line)
+                elif line.startswith("JSON saved: "):
+                    json_path = line[len("JSON saved: "):].strip()
+                    self._emit(kind="meta", text=line)
                 elif line.startswith("CSV saved: "):
                     csv_path = line[len("CSV saved: "):].strip()
                     self._emit(kind="meta", text=line)
@@ -272,18 +275,19 @@ class Api:
                 else:
                     self._emit(kind="meta", text=line)
             code = self._proc.wait()
-            ok = code == 0 and not self._cancelled and bool(csv_path)
+            ok = code == 0 and not self._cancelled and bool(json_path)
             if ok:
                 stats = dict(kv.split("=") for kv in summary.split() if "=" in kv)
                 self._emit(kind="progress", pct=100, label="Comments exported")
-                self._emit(kind="output", path=csv_path, label="Open comments file")
+                self._emit(kind="output", path=json_path, label="Open comments JSON")
                 self._emit(kind="result", text=(
                     f"## Comments export complete\n\n"
                     f"- **Videos covered:** {stats.get('videos', '?')} "
                     f"({stats.get('fetched', '?')} fetched, {stats.get('cached', '?')} cached, "
                     f"{stats.get('failed', '?')} failed)\n"
                     f"- **Comments exported:** {stats.get('comments', '?')}\n"
-                    f"- **Saved to:** `{csv_path}`"))
+                    f"- **JSON (for AI analysis):** `{json_path}`\n"
+                    f"- **CSV (for Excel):** `{csv_path}`"))
             self._emit(kind="done", ok=ok, cancelled=self._cancelled)
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")

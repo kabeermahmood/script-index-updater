@@ -8,8 +8,11 @@ Enumerates all videos on the channel's Videos tab (numbered oldest-first,
 same as fetch_channel.py), downloads each video's full comment threads
 (top-level comments and replies) via yt-dlp - no API key needed - and writes:
 
-  <out_dir>/comments/<video_id>.json     raw per-video comment dump
-  <csv-dir>/<Channel Name> Comments.csv  one spreadsheet with every comment
+  <out_dir>/comments/<video_id>.json      raw per-video comment dump
+  <csv-dir>/<Channel Name> Comments.json  the whole channel's comments, one
+                                          structured file (primary export -
+                                          ideal for AI analysis)
+  <csv-dir>/<Channel Name> Comments.csv   the same data as a spreadsheet
 
 Videos are fetched by a small pool of parallel workers (--workers, default 3)
 with rate-limit awareness: a 429 from YouTube puts ALL workers on a shared
@@ -94,6 +97,16 @@ def published(ts):
         return ""
     return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M")
+
+
+def write_json(path, channel, url, dumps):
+    out = {"channel": channel, "url": url,
+           "videos": [{"n": d["n"], "video_id": d["video_id"],
+                       "title": d["title"], "url": d.get("url", ""),
+                       "comment_count": len(d["comments"]),
+                       "comments": d["comments"]} for d in dumps]}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=1, ensure_ascii=False)
 
 
 def write_csv(path, dumps):
@@ -221,11 +234,14 @@ def main():
     safe = re.sub(r'[<>:"/\\|?*]', "", channel or "Channel").strip() or "Channel"
     csv_dir = args.csv_dir or args.out_dir
     os.makedirs(csv_dir, exist_ok=True)
+    json_path = os.path.join(csv_dir, f"{safe} Comments.json")
+    write_json(json_path, channel, url, dumps)
     csv_path = os.path.join(csv_dir, f"{safe} Comments.csv")
     write_csv(csv_path, dumps)
 
     log(f"\nSUMMARY: videos={len(dumps)} comments={total} fetched={fetched} "
         f"cached={cached} failed={failed}")
+    log(f"JSON saved: {json_path}")
     log(f"CSV saved: {csv_path}")
 
 
