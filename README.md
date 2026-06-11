@@ -12,7 +12,7 @@
 
 **🌐 Website: [script-index-updater.vercel.app](https://script-index-updater.vercel.app)**
 
-Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports **or paste a channel URL**, and it extracts every script (or downloads every video transcript), identifies the vehicle each one is about (even when it isn't labelled), and appends **only the new entries** to a formatted Word master list.
+Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports **or paste a channel URL**, and it extracts every script (or downloads every video transcript), identifies each script's **hero** — the specific tank, ship, aircraft, or weapon the story is about, whatever your channel covers — and appends **only the new entries** to a formatted Word master list.
 
 <div align="center">
   <img src="docs/screenshot.png" width="820" alt="Script Index Updater main window — dark mission-control UI with drop zone, master list field, and live mission feed">
@@ -24,12 +24,12 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 - **YouTube channel mode** — paste a channel URL and every published video's transcript is downloaded in bulk (manual captions preferred, auto-captions fallback) and indexed exactly like script PDFs. Transcripts are cached on disk, so re-running after new uploads only fetches what's new.
 - **Live operation progress** — a real progress bar tracks the whole run: per-video counts while transcripts download (`212/486`), then phase-by-phase updates (extract → compare → identify → append) as Claude works, plus a "happening right now" line showing the current action.
 - **Pause / resume / end controls** — pause genuinely freezes the run (the whole worker process tree is suspended — no CPU, network, or tokens burned), resume picks up exactly where it stopped, and end aborts cleanly even from a paused state.
-- **AI-powered subject identification** — scripts without an explicit `Vehicle in Context:` label are read and classified by [Claude Code](https://claude.com/claude-code) running headlessly. No API key required; it uses your existing Claude Code installation.
+- **AI-powered hero identification** — scripts without an explicit `Vehicle/Ship/Weapon in Context:` label are read by [Claude Code](https://claude.com/claude-code) running headlessly, which names the script's hero in the channel's own domain: tanks for a vehicles channel, warships for a naval channel, rifles for a weapons channel. No API key required; it uses your existing Claude Code installation.
 - **True incremental updates** — entries are matched against the master list by normalized title (with fuzzy near-miss review), so re-running on an updated export only appends what's new. Your existing rows are never touched or regenerated.
 - **Multi-document runs** — queue several PDFs; each is processed in order and deduplicated against entries appended from the previous ones.
 - **Export-quirk handling** — detects and recovers from Google Docs export defects: dropped tab-marker pages (two scripts merged into one segment), tab numbering gaps, malformed titles, and non-script tabs (notes/brainstorms).
 - **Format-preserving appends** — new table rows are cloned from existing ones, so fonts, borders, shading, and column widths stay exactly as designed. A bundled template bootstraps brand-new master files.
-- **Optional angle/summary column** — flip a toggle and each new entry also gets a 1–2 sentence summary of the script's specific angle. Existing 3-column masters are upgraded in place, with earlier rows left blank.
+- **Optional story-context column** — flip a toggle and each new entry also gets 2–3 sentences on what the script's story is actually about: what happens, the hook, why it matters. Existing 3-column masters are upgraded in place, with earlier rows left blank.
 
 ## How it works
 
@@ -42,13 +42,13 @@ flowchart LR
     C --> D[extract_tabs.py<br/>PDF → structured tabs]
     D2 --> E
     D --> E[compare.py<br/>dedupe vs master]
-    E --> F[Claude identifies<br/>vehicles for new tabs]
+    E --> F[Claude identifies<br/>each script's hero]
     F --> G[append_master.py<br/>format-preserving append]
     G --> H[(Master .docx)]
     C -->|live stream-json| B
 ```
 
-The deterministic steps (transcript fetching, parsing, deduplication, document surgery) are plain Python for speed and reliability. The one step that genuinely needs intelligence — *"which vehicle is this 4,000-word script actually about?"* — is delegated to Claude, orchestrated by the [`SKILL.md`](SKILL.md) playbook. Channel transcripts are fetched by the GUI itself before Claude starts, so the progress bar shows exact per-video counts during the slowest part of the run; Claude then announces each workflow phase, which the GUI maps onto the remainder of the bar.
+The deterministic steps (transcript fetching, parsing, deduplication, document surgery) are plain Python for speed and reliability. The one step that genuinely needs intelligence — *"which ship/tank/weapon is this 4,000-word script actually about, and what story does it tell?"* — is delegated to Claude, orchestrated by the [`SKILL.md`](SKILL.md) playbook. Channel transcripts are fetched by the GUI itself before Claude starts, so the progress bar shows exact per-video counts during the slowest part of the run; Claude then announces each workflow phase, which the GUI maps onto the remainder of the bar.
 
 ## Repository layout
 

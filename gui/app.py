@@ -54,13 +54,14 @@ PROMPT_TEMPLATE = (
     "Work fully autonomously - never ask questions; make sensible decisions yourself. "
     "When finished, print a combined summary in markdown: scripts/videos found per source, "
     "how many were already in the master, how many were appended (list each new title with "
-    "its vehicle), and any anomalies: things the user should fix in their Google Docs, or "
-    "videos skipped because they have no captions."
+    "its hero - the ship/vehicle/aircraft/weapon the script is about), and any anomalies: "
+    "things the user should fix in their Google Docs, or videos skipped because they have "
+    "no captions."
 )
 
 PDF_SOURCE = (
     "Process these PDFs IN ORDER, completing the full workflow (extract, compare, identify "
-    "vehicles, append) for each one before starting the next, so later PDFs are "
+    "each script's hero, append) for each one before starting the next, so later PDFs are "
     "deduplicated against entries appended from earlier ones:\n{pdf_list}"
 )
 
@@ -82,11 +83,11 @@ PROGRESS_CLAUSE = (
 PHASE_RE = re.compile(r"^PHASE\s+(\d+)\s*/\s*(\d+)\s*[-—:]\s*(.+?)\s*$", re.M)
 
 ANGLE_CLAUSE = (
-    "\n\nThe user enabled the Angle/Summary column. For EVERY new entry, also write an "
-    '"angle" field in rows.json: a concise 1-2 sentence summary (max ~30 words) of the '
-    "script's specific angle or hook - the particular story it tells about the vehicle, "
-    "not a generic description of the vehicle itself. append_master.py automatically "
-    "adds and fills the 'Angle / Summary' column (existing rows keep an empty cell)."
+    "\n\nThe user enabled the Story Context column. For EVERY new entry, also write an "
+    '"angle" field in rows.json: 2-3 sentences (~40-60 words) of story context - what '
+    "actually happens in the script, its hook, and why it matters. Never a generic "
+    "encyclopedia description of the hero. append_master.py automatically adds and "
+    "fills this column (existing rows keep an empty cell)."
 )
 
 

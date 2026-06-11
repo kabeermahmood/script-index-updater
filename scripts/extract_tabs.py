@@ -24,7 +24,8 @@ def clean_title(raw):
     t = re.sub(r"^([0-9]\s*)?(?=[A-Z\"'“‘])", "", t)
     # cut off embedded context labels that belong to the next block
     parts = re.split(
-        r"\s*(?:Vehicle\s+in\s+Context|Weapon\s+in\s+Context|Context\s+Vehicle|Context)\s*:",
+        r"\s*(?:(?:Vehicle|Weapon|Ship|Aircraft|Subject|Hero)\s+in\s+Context"
+        r"|Context\s+(?:Vehicle|Ship|Weapon)|Context)\s*:",
         t, maxsplit=1, flags=re.I)
     t = parts[0]
     rest = parts[1].strip() if len(parts) > 1 else ""
@@ -51,7 +52,7 @@ def parse_segment(seg):
     vic = ""
     body_start = 1
     for i, b in enumerate(blocks[1:5], start=1):
-        m = re.match(r"(?:vehicle|weapon)\s+in\s+context\s*:?\s*(.*)", b, re.I)
+        m = re.match(r"(?:vehicle|weapon|ship|aircraft|subject|hero)\s+in\s+context\s*:?\s*(.*)", b, re.I)
         if m:
             vic = m.group(1).strip()
             body_start = i + 1

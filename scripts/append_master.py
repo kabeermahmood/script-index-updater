@@ -20,7 +20,7 @@ from docx.oxml.ns import qn
 
 TEMPLATE = os.path.join(os.path.dirname(__file__), "..", "assets", "master_template.docx")
 PLACEHOLDER = "__TAB__"
-ANGLE_HEADER = "Angle / Summary"
+ANGLE_HEADER = "Story Context"
 WIDTHS_4 = [600, 4060, 2100, 2600]  # dxa, sums to 9360 like the 3-col layout
 
 
