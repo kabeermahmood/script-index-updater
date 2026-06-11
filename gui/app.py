@@ -51,7 +51,7 @@ def remember_settings(master, include_angle, channel=""):
 
 PROMPT_TEMPLATE = (
     'Read the file "{skill}" and follow its workflow to index video scripts into the '
-    'master Word list at "{master}".\n{sources}\n'
+    "Word master list specified for each source below.\n{sources}\n"
     "Work fully autonomously - never ask questions; make sensible decisions yourself. "
     "When finished, print a combined summary in markdown: scripts/videos found per source, "
     "how many were already in the master, how many were appended (list each new title with "
@@ -61,16 +61,18 @@ PROMPT_TEMPLATE = (
 )
 
 PDF_SOURCE = (
-    "Process these PDFs IN ORDER, completing the full workflow (extract, compare, identify "
-    "each script's hero, append) for each one before starting the next, so later PDFs are "
-    "deduplicated against entries appended from earlier ones:\n{pdf_list}"
+    'Process these PDFs IN ORDER into the master list at "{master}", completing the full '
+    "workflow (extract, compare, identify each script's hero, append) for each one before "
+    "starting the next, so later PDFs are deduplicated against entries appended from "
+    "earlier ones:\n{pdf_list}"
 )
 
 CHANNEL_SOURCE = (
-    "Index the YouTube channel \"{url}\" following the skill's channel mode. The "
-    "transcripts are ALREADY FETCHED: \"{tabs}\" is the channel's tabs.json and the "
-    "transcripts folder sits next to it. Do NOT run fetch_channel.py again - continue "
-    "from Step 2 (compare / identify / append) on that tabs.json."
+    "Index the YouTube channel \"{url}\" into the master list at \"{master}\", following "
+    "the skill's channel mode. The transcripts are ALREADY FETCHED: \"{tabs}\" is the "
+    "channel's tabs.json and the transcripts folder sits next to it. Do NOT run "
+    "fetch_channel.py again - continue from Step 2 (compare / identify / append) on "
+    "that tabs.json."
 )
 
 PROGRESS_CLAUSE = (
@@ -221,7 +223,7 @@ class Api:
         try:
             self._master = master
             self._report_name = ""
-            chan_tabs = None
+            chan_tabs, chan_master = None, master
             if channel:
                 fetch_span = (0, 50) if pdfs else (0, 60)
                 if not self._fetch_channel(channel, fetch_span):
@@ -233,6 +235,14 @@ class Api:
                         self._report_name = (json.load(f).get("channel") or "").strip()
                 except (OSError, ValueError):
                     pass
+                if self._report_name:
+                    # every channel gets its own index, named after the channel
+                    safe = re.sub(r'[<>:"/\\|?*]', "", self._report_name).strip()
+                    chan_master = os.path.join(os.path.dirname(master) or ".",
+                                               f"{safe} Script Index.docx")
+                    self._master = chan_master
+                    self._emit(kind="meta", text=f"Channel index: {chan_master}")
+                    self._emit(kind="master", path=chan_master)
                 self._pbase = fetch_span[1]
                 self._pspan = 100 - self._pbase
             else:
@@ -243,15 +253,11 @@ class Api:
             sources = []
             if pdfs:
                 pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
-                sources.append(PDF_SOURCE.format(pdf_list=pdf_list))
+                sources.append(PDF_SOURCE.format(master=master, pdf_list=pdf_list))
             if channel:
-                clause = CHANNEL_SOURCE.format(url=channel, tabs=chan_tabs)
-                if pdfs:
-                    clause = ("After all PDFs are fully processed and appended: " + clause +
-                              " This dedupes the channel's videos against the entries the "
-                              "PDFs just added.")
-                sources.append(clause)
-            prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master,
+                sources.append(CHANNEL_SOURCE.format(url=channel, master=chan_master,
+                                                     tabs=chan_tabs))
+            prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD,
                                             sources="\n\n".join(sources))
             if include_angle:
                 prompt += ANGLE_CLAUSE

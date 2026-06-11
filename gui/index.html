@@ -279,7 +279,8 @@
         <input type="text" id="master" spellcheck="false">
         <button class="btn" onclick="pickMaster()">Browse</button>
       </div>
-      <div class="note">New entries are appended. If the file doesn't exist, it's created. Close it in Word before starting.</div>
+      <div class="note">New entries are appended. If the file doesn't exist, it's created. Close it in Word before starting.
+        Channel runs get their own index in this folder, named "&lt;Channel&gt; Script Index.docx".</div>
       <div class="opt-row" onclick="toggleAngle()">
         <div class="tswitch" id="tswitch"><span class="knob"></span></div>
         <div>
@@ -448,6 +449,7 @@ function onEvent(e) {
   else if (e.kind === 'meta') log(e.text, 'meta');
   else if (e.kind === 'err') log(e.text, 'err');
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
+  else if (e.kind === 'master') $('master').value = e.path;
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
     setRunning(false);
