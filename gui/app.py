@@ -95,6 +95,7 @@ class Api:
         self._window = None
         self._proc = None
         self._cancelled = False
+        self._paused = False
         self._initial_pdfs = initial_pdfs
         self._pbase, self._pspan = 0, 100  # Claude's slice of the progress bar
 
@@ -132,10 +133,47 @@ class Api:
         if os.path.exists(p):
             os.startfile(p)
 
+    def _tree(self):
+        """psutil handles for the worker process and all of its children."""
+        try:
+            import psutil
+            p = psutil.Process(self._proc.pid)
+            return [p] + p.children(recursive=True)
+        except Exception:
+            return []
+
+    def toggle_pause(self):
+        """Suspend/resume the whole worker tree. Returns the new paused state."""
+        if not self._proc or self._proc.poll() is not None:
+            return False
+        tree = self._tree()
+        if not tree:
+            self._emit(kind="err", text="Pause needs psutil - run: pip install psutil")
+            return False
+        self._paused = not self._paused
+        for p in (tree if self._paused else reversed(tree)):
+            try:
+                p.suspend() if self._paused else p.resume()
+            except Exception:
+                pass
+        self._emit(kind="meta",
+                   text="── MISSION PAUSED ──" if self._paused else "── MISSION RESUMED ──")
+        return self._paused
+
     def cancel(self):
         self._cancelled = True
+        if self._paused:
+            self.toggle_pause()  # a suspended tree can't exit - resume it first
         if self._proc and self._proc.poll() is None:
-            self._proc.kill()
+            tree = self._tree()
+            if tree:
+                for p in reversed(tree):  # children before parent
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+            else:
+                self._proc.kill()
 
     def start(self, pdfs, master, include_angle=False, channel=""):
         """Validate and launch. Returns an error string, or None if started."""
@@ -161,6 +199,7 @@ class Api:
 
         remember_settings(master, bool(include_angle), channel)
         self._cancelled = False
+        self._paused = False
         threading.Thread(target=self._run_job,
                          args=(claude, pdfs, master, bool(include_angle), channel),
                          daemon=True).start()
@@ -341,7 +380,7 @@ def main():
         "Script Index Updater",
         os.path.join(HERE, "index.html"),
         js_api=api,
-        width=1000, height=680, min_size=(820, 560),
+        width=1000, height=760, min_size=(820, 600),
         background_color="#0b0f14")
     api._window = window
     window.events.shown += lambda *a: apply_window_icon(window)

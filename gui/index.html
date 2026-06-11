@@ -70,7 +70,11 @@
 
   /* ---------- layout ---------- */
   .cols { display: flex; gap: 14px; flex: 1; min-height: 0; }
-  .left { width: 360px; flex: none; display: flex; flex-direction: column; gap: 12px; }
+  .left { width: 360px; flex: none; display: flex; flex-direction: column; gap: 12px;
+          overflow-y: auto; padding-right: 2px; }
+  .left::-webkit-scrollbar { width: 8px; }
+  .left::-webkit-scrollbar-thumb { background: #243140; border-radius: 5px; }
+  .left .card { flex: none; }
   .right { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
   .card {
@@ -159,10 +163,23 @@
   }
   #start:hover { filter: brightness(1.1); transform: translateY(-1px); }
   #start:disabled { filter: grayscale(.6) brightness(.7); cursor: default; transform: none; }
-  #start.stop {
-    background: linear-gradient(135deg, #4b5563, #374151); color: #e5e7eb;
-    box-shadow: none;
+  .runctl { display: none; gap: 8px; }
+  .runctl button {
+    flex: 1; padding: 12px; border-radius: 10px; cursor: pointer;
+    font-size: 13px; font-weight: 700; letter-spacing: 1.5px;
+    transition: all .15s;
   }
+  #pause {
+    background: rgba(245,158,11,.12); color: var(--amber);
+    border: 1px solid rgba(245,158,11,.45);
+  }
+  #pause:hover { background: rgba(245,158,11,.22); }
+  #endbtn {
+    background: #1a2433; color: var(--txt); border: 1px solid var(--line);
+  }
+  #endbtn:hover { color: var(--red); border-color: rgba(248,113,113,.5); }
+  .tag.pause { color: var(--cyan); border-color: rgba(103,232,249,.4); }
+  .tag.pause .dot { background: var(--cyan); }
   .scanbar { height: 3px; border-radius: 2px; overflow: hidden; margin-top: 9px; background: #16202c; visibility: hidden; }
   .scanbar.on { visibility: visible; }
   .scanbar i {
@@ -273,7 +290,11 @@
     </div>
 
     <div class="card">
-      <button id="start" onclick="startOrStop()">▶&nbsp;&nbsp;START INDEXING</button>
+      <button id="start" onclick="startTask()">▶&nbsp;&nbsp;START INDEXING</button>
+      <div class="runctl" id="runctl">
+        <button id="pause" onclick="togglePause()">⏸&nbsp;&nbsp;PAUSE</button>
+        <button id="endbtn" onclick="endTask()">■&nbsp;&nbsp;END</button>
+      </div>
       <div class="scanbar" id="scan"><i></i></div>
     </div>
   </div>
@@ -372,9 +393,32 @@ function setProgress(pct, label) {
 }
 function setNow(text) { $('pnow').textContent = text; }
 
-/* ---------- start / stop ---------- */
-async function startOrStop() {
-  if (running) { pywebview.api.cancel(); return; }
+/* ---------- start / pause / end ---------- */
+let paused = false;
+
+function setRunning(r) {
+  running = r;
+  $('start').style.display = r ? 'none' : 'block';
+  $('runctl').style.display = r ? 'flex' : 'none';
+  $('scan').classList.toggle('on', r);
+  if (!r) setPausedUi(false);
+}
+function setPausedUi(p) {
+  paused = p;
+  $('pause').innerHTML = p ? '▶&nbsp;&nbsp;RESUME' : '⏸&nbsp;&nbsp;PAUSE';
+  document.querySelectorAll('.scanbar i, .radar').forEach(el =>
+    el.style.animationPlayState = p ? 'paused' : 'running');
+}
+async function togglePause() {
+  if (!running) return;
+  const p = await pywebview.api.toggle_pause();
+  setPausedUi(p);
+  setStatus(p ? 'pause' : 'run', p ? 'PAUSED' : 'INDEXING');
+}
+function endTask() { if (running) pywebview.api.cancel(); }
+
+async function startTask() {
+  if (running) return;
   const channel = $('channel').value.trim();
   if (!pdfs.length && !channel) { log('Add at least one PDF or a YouTube channel URL first.', 'err'); return; }
   const master = $('master').value.trim();
@@ -383,15 +427,12 @@ async function startOrStop() {
   const err = await pywebview.api.start(pdfs, master, includeAngle, channel);
   if (err) { log(err, 'err'); return; }
 
-  running = true;
+  setRunning(true);
   $('feed').innerHTML = '';
   $('result').classList.remove('show');
   setProgress(0, 'Starting up');
   setNow('');
   setStatus('run', 'INDEXING');
-  $('start').textContent = '■  ABORT';
-  $('start').classList.add('stop');
-  $('scan').classList.add('on');
   const srcs = [];
   if (pdfs.length) srcs.push(`${pdfs.length} document(s)`);
   if (channel) srcs.push('1 channel');
@@ -409,10 +450,7 @@ function onEvent(e) {
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
-    running = false;
-    $('start').textContent = '▶  START INDEXING';
-    $('start').classList.remove('stop');
-    $('scan').classList.remove('on');
+    setRunning(false);
     setNow('');
     if (e.ok) { setStatus('done', 'COMPLETE'); setProgress(100, 'Mission complete'); }
     else {
