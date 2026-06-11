@@ -7,6 +7,7 @@ identify vehicles, and append new entries to the Word master list.
 Launch:  pythonw app.py [pdf1] [pdf2] ...
 (Dragging PDFs onto the desktop launcher .bat passes them as arguments.)
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 
 import webview
@@ -63,10 +65,21 @@ PDF_SOURCE = (
 )
 
 CHANNEL_SOURCE = (
-    "Follow the skill's channel mode for the YouTube channel \"{url}\": fetch every "
-    "video's transcript with fetch_channel.py, then run the same compare / identify / "
-    "append workflow on the result."
+    "Index the YouTube channel \"{url}\" following the skill's channel mode. The "
+    "transcripts are ALREADY FETCHED: \"{tabs}\" is the channel's tabs.json and the "
+    "transcripts folder sits next to it. Do NOT run fetch_channel.py again - continue "
+    "from Step 2 (compare / identify / append) on that tabs.json."
 )
+
+PROGRESS_CLAUSE = (
+    "\n\nProgress reporting: the moment you begin each major phase of work, print a plain "
+    "text line exactly of the form 'PHASE k/N - <label, under 8 words>' where k is the "
+    "phase number and N the total phases you plan for the whole job (e.g. extract, "
+    "compare, identify vehicles, append - per source). Keep N consistent for the entire "
+    "run and emit the phases in order."
+)
+
+PHASE_RE = re.compile(r"^PHASE\s+(\d+)\s*/\s*(\d+)\s*[-—:]\s*(.+?)\s*$", re.M)
 
 ANGLE_CLAUSE = (
     "\n\nThe user enabled the Angle/Summary column. For EVERY new entry, also write an "
@@ -83,6 +96,7 @@ class Api:
         self._proc = None
         self._cancelled = False
         self._initial_pdfs = initial_pdfs
+        self._pbase, self._pspan = 0, 100  # Claude's slice of the progress bar
 
     # ---------- helpers ----------
     def _emit(self, **payload):
@@ -146,29 +160,94 @@ class Api:
             return "The 'claude' command is not on PATH. Install Claude Code first."
 
         remember_settings(master, bool(include_angle), channel)
-        sources = []
-        if pdfs:
-            pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
-            sources.append(PDF_SOURCE.format(pdf_list=pdf_list))
-        if channel:
-            clause = CHANNEL_SOURCE.format(url=channel)
-            if pdfs:
-                clause = ("After all PDFs are fully processed and appended: " + clause +
-                          " This dedupes the channel's videos against the entries the "
-                          "PDFs just added.")
-            sources.append(clause)
-        prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master,
-                                        sources="\n\n".join(sources))
-        if include_angle:
-            prompt += ANGLE_CLAUSE
-        cmd = [claude, "-p", prompt,
-               "--output-format", "stream-json", "--verbose",
-               "--allowedTools", ALLOWED_TOOLS]
         self._cancelled = False
-        threading.Thread(target=self._run, args=(cmd,), daemon=True).start()
+        threading.Thread(target=self._run_job,
+                         args=(claude, pdfs, master, bool(include_angle), channel),
+                         daemon=True).start()
         return None
 
     # ---------- worker ----------
+    @staticmethod
+    def _channel_dir(url):
+        slug = hashlib.md5(url.lower().encode()).hexdigest()[:10]
+        return os.path.join(tempfile.gettempdir(), "index-scripts", f"channel-{slug}")
+
+    def _run_job(self, claude, pdfs, master, include_angle, channel):
+        """Stage 1: fetch channel transcripts (live per-video progress).
+        Stage 2: headless Claude run over PDFs and/or the fetched channel."""
+        try:
+            chan_tabs = None
+            if channel:
+                fetch_span = (0, 50) if pdfs else (0, 60)
+                if not self._fetch_channel(channel, fetch_span):
+                    self._emit(kind="done", ok=False, cancelled=self._cancelled)
+                    return
+                chan_tabs = os.path.join(self._channel_dir(channel), "tabs.json")
+                self._pbase = fetch_span[1]
+                self._pspan = 100 - self._pbase
+            else:
+                self._pbase, self._pspan = 0, 100
+
+            sources = []
+            if pdfs:
+                pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
+                sources.append(PDF_SOURCE.format(pdf_list=pdf_list))
+            if channel:
+                clause = CHANNEL_SOURCE.format(url=channel, tabs=chan_tabs)
+                if pdfs:
+                    clause = ("After all PDFs are fully processed and appended: " + clause +
+                              " This dedupes the channel's videos against the entries the "
+                              "PDFs just added.")
+                sources.append(clause)
+            prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master,
+                                            sources="\n\n".join(sources))
+            if include_angle:
+                prompt += ANGLE_CLAUSE
+            prompt += PROGRESS_CLAUSE
+            self._emit(kind="progress", pct=self._pbase, label="Analyzing scripts")
+            cmd = [claude, "-p", prompt,
+                   "--output-format", "stream-json", "--verbose",
+                   "--allowedTools", ALLOWED_TOOLS]
+            self._run(cmd)
+        except Exception as e:
+            self._emit(kind="err", text=f"ERROR: {e}")
+            self._emit(kind="done", ok=False, cancelled=self._cancelled)
+
+    def _fetch_channel(self, url, span, max_videos=0):
+        """Run fetch_channel.py, streaming its per-video progress to the UI."""
+        out_dir = self._channel_dir(url)
+        script = os.path.normpath(os.path.join(HERE, "..", "scripts", "fetch_channel.py"))
+        cmd = [sys.executable, "-u", script, url, out_dir]
+        if max_videos:
+            cmd += ["--max", str(max_videos)]
+        self._emit(kind="progress", pct=span[0], label="Listing channel videos")
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        self._proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+            errors="replace", creationflags=flags, env=env)
+        for line in self._proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            m = re.match(r"\[(\d+)/(\d+)\]", line)
+            if m:
+                n, total = int(m.group(1)), int(m.group(2))
+                pct = span[0] + (span[1] - span[0]) * n / max(total, 1)
+                self._emit(kind="progress", pct=round(pct, 1),
+                           label=f"Fetching transcripts ({n}/{total})")
+                self._emit(kind="tool", text=line)
+            else:
+                self._emit(kind="meta", text=line)
+        code = self._proc.wait()
+        if self._cancelled or code != 0:
+            if not self._cancelled:
+                self._emit(kind="err", text="Transcript fetch failed - see feed above.")
+            return False
+        self._emit(kind="progress", pct=span[1], label="Transcripts ready")
+        return True
+
     def _run(self, cmd):
         try:
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -201,7 +280,13 @@ class Api:
             for block in evt.get("message", {}).get("content", []):
                 btype = block.get("type")
                 if btype == "text" and block.get("text", "").strip():
-                    self._emit(kind="say", text=block["text"].strip())
+                    text = block["text"].strip()
+                    for m in PHASE_RE.finditer(text):
+                        k, n = int(m.group(1)), max(int(m.group(2)), 1)
+                        pct = self._pbase + self._pspan * (min(k, n) - 1) / n
+                        self._emit(kind="progress", pct=round(pct, 1),
+                                   label=m.group(3))
+                    self._emit(kind="say", text=text)
                 elif btype == "tool_use":
                     name = block.get("name", "tool")
                     inp = block.get("input", {})

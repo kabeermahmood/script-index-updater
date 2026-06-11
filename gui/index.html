@@ -172,6 +172,27 @@
   }
   @keyframes scan { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 
+  /* ---------- progress ---------- */
+  #prog-card { padding-bottom: 12px; }
+  .pbar { height: 8px; border-radius: 4px; background: #16202c; overflow: hidden;
+          border: 1px solid var(--line); }
+  .pbar i {
+    display: block; height: 100%; width: 0%; border-radius: 4px;
+    background: linear-gradient(90deg, var(--amber-deep), var(--amber));
+    box-shadow: 0 0 10px rgba(245,158,11,.45);
+    transition: width .4s ease;
+  }
+  .prow { display: flex; justify-content: space-between; align-items: baseline;
+          margin-top: 8px; gap: 10px; }
+  #pphase { color: var(--amber); font-size: 12.5px; font-weight: 600; letter-spacing: .5px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #ppct { color: var(--dim); font-family: Consolas, "Cascadia Mono", monospace;
+          font-size: 12px; flex: none; }
+  #pnow { color: var(--dim); font-size: 11.5px; margin-top: 3px;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 15px; }
+  #pnow::before { content: "▸ "; color: var(--cyan); }
+  #pnow:empty::before { content: ""; }
+
   /* ---------- console ---------- */
   #console-card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   #feed {
@@ -258,6 +279,15 @@
   </div>
 
   <div class="right">
+    <div class="card" id="prog-card">
+      <h2>OPERATION PROGRESS</h2>
+      <div class="pbar"><i id="pfill"></i></div>
+      <div class="prow">
+        <span id="pphase">Standing by</span>
+        <span id="ppct">0%</span>
+      </div>
+      <div id="pnow"></div>
+    </div>
     <div class="card" id="console-card">
       <h2>MISSION FEED</h2>
       <div id="feed"><div class="ln meta">Awaiting orders. Add a PDF or a channel URL and press start.</div></div>
@@ -335,6 +365,12 @@ function log(text, cls) {
   $('feed').appendChild(d);
   $('feed').scrollTop = $('feed').scrollHeight;
 }
+function setProgress(pct, label) {
+  $('pfill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+  $('ppct').textContent = Math.round(pct) + '%';
+  if (label) $('pphase').textContent = label;
+}
+function setNow(text) { $('pnow').textContent = text; }
 
 /* ---------- start / stop ---------- */
 async function startOrStop() {
@@ -350,6 +386,8 @@ async function startOrStop() {
   running = true;
   $('feed').innerHTML = '';
   $('result').classList.remove('show');
+  setProgress(0, 'Starting up');
+  setNow('');
   setStatus('run', 'INDEXING');
   $('start').textContent = '■  ABORT';
   $('start').classList.add('stop');
@@ -365,17 +403,20 @@ async function startOrStop() {
 /* ---------- events from Python ---------- */
 function onEvent(e) {
   if (e.kind === 'say') log(e.text, 'say');
-  else if (e.kind === 'tool') log(e.text, 'tool');
+  else if (e.kind === 'tool') { log(e.text, 'tool'); setNow(e.text); }
   else if (e.kind === 'meta') log(e.text, 'meta');
   else if (e.kind === 'err') log(e.text, 'err');
+  else if (e.kind === 'progress') setProgress(e.pct, e.label);
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
     running = false;
     $('start').textContent = '▶  START INDEXING';
     $('start').classList.remove('stop');
     $('scan').classList.remove('on');
-    if (e.ok) setStatus('done', 'COMPLETE');
+    setNow('');
+    if (e.ok) { setStatus('done', 'COMPLETE'); setProgress(100, 'Mission complete'); }
     else {
+      $('pphase').textContent = e.cancelled ? 'Aborted' : 'Failed';
       setStatus('fail', e.cancelled ? 'ABORTED' : 'FAILED');
       $('result-banner').textContent = e.cancelled ? '◈ MISSION ABORTED' : '◈ MISSION FAILED';
       $('result-banner').classList.add('fail');

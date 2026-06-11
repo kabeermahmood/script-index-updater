@@ -50,7 +50,9 @@ Produces `tabs.json` with one record per tab: `{tab, title, vic, snippet}`.
 
 ### Step 1 (channel mode) — Fetch transcripts from a YouTube channel
 
-When the source is a channel URL instead of a PDF:
+When the source is a channel URL instead of a PDF (skip this step if the
+prompt says the transcripts are already fetched — the GUI pre-fetches them
+and gives you the tabs.json path):
 
 ```
 python <skill>/scripts/fetch_channel.py "<channel_url>" <workdir>/channel
