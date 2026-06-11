@@ -1,20 +1,23 @@
 ---
 name: index-scripts
-description: Build or update a Word master list of YouTube video scripts (title + vehicle in context) from a Google Docs PDF export. Use this whenever the user provides a PDF of script tabs and wants them indexed, catalogued, or added to their existing list — including phrases like "index these scripts", "add the new scripts to the list", "update the master list", "make the title/vehicle list from this PDF", or when they drop a scripts PDF and ask for a list of titles and vehicles. Appends only NEW entries to the existing master; never rebuilds it from scratch.
+description: Build or update a Word master list of YouTube video scripts (title + vehicle in context) from a Google Docs PDF export or directly from a YouTube channel URL. Use this whenever the user provides a PDF of script tabs OR a channel URL and wants the videos indexed, catalogued, or added to their existing list — including phrases like "index these scripts", "add the new scripts to the list", "update the master list", "make the title/vehicle list from this PDF", "index my channel", "download all the transcripts from this channel and index them". Appends only NEW entries to the existing master; never rebuilds it from scratch.
 ---
 
-# Index Scripts: PDF → Word master list
+# Index Scripts: PDF or YouTube channel → Word master list
 
-Turn a Google Docs PDF export of video-script tabs into rows of
+Turn a Google Docs PDF export of video-script tabs — or every video
+transcript on a YouTube channel — into rows of
 **Tab # | Video Title | Vehicle in Context** in a Word master list,
 appending only the scripts that are not already in the list.
 
 ## Inputs
 
-1. **PDF path(s)** — required; one or more. Ask the user if not given. With
-   multiple PDFs, run the full workflow for each in the given order, finishing
-   the append before starting the next PDF so later ones dedupe against
-   entries just added.
+1. **PDF path(s) and/or a YouTube channel URL** — at least one source is
+   required. Ask the user if not given. With multiple PDFs, run the full
+   workflow for each in the given order, finishing the append before starting
+   the next PDF so later ones dedupe against entries just added. When a
+   channel URL is given alongside PDFs, process the PDFs first, then the
+   channel.
 2. **Master docx path** — the list to append to. Default: the `master` value
    in `gui/config.json` next to this skill (the GUI keeps it updated with the
    last-used path); if that file is missing, ask the user. If the master docx
@@ -44,6 +47,33 @@ Produces `tabs.json` with one record per tab: `{tab, title, vic, snippet}`.
   the title manually. Some tabs are not scripts at all (research notes,
   brainstorms) — list them with a `(Not a script — …)` note in the title and
   the vehicle set to what fits (e.g. "Multiple vehicles").
+
+### Step 1 (channel mode) — Fetch transcripts from a YouTube channel
+
+When the source is a channel URL instead of a PDF:
+
+```
+python <skill>/scripts/fetch_channel.py "<channel_url>" <workdir>/channel
+```
+
+This enumerates every video on the channel's Videos tab and downloads each
+transcript (manual captions preferred, auto-generated fallback), producing
+`<workdir>/channel/tabs.json` in the **same schema as extract_tabs.py** plus
+plain-text transcripts in `<workdir>/channel/transcripts/`. Continue with
+Step 2 exactly as for a PDF. Channel-mode notes:
+
+- `tab` numbers are upload order (1 = oldest video), so they stay stable as
+  new videos are published. Titles are the video titles verbatim.
+- Each record carries a `transcript_file` path — in Step 3, read that file
+  (instead of `dump.txt`) when the snippet doesn't reveal the vehicle.
+- Transcripts are cached on disk; re-running after new uploads only fetches
+  the new videos. A large channel takes ~2s per uncached video — for a first
+  run over hundreds of videos, warn the user it will take a few minutes.
+- Auto-captions lack punctuation and may mis-hear designations
+  ("Bismarck" → "bismark") — fine for identifying the vehicle, but never
+  copy designations from the transcript without sanity-checking the spelling.
+- Videos with no captions at all are listed in `anomalies` — report them at
+  the end; there is nothing to fix.
 
 ### Step 2 — Compare against the master
 
@@ -118,4 +148,4 @@ in their Google Doc. Clean up the temp files.
 
 ## Dependencies
 
-`pip install pymupdf python-docx`
+`pip install pymupdf python-docx yt-dlp`

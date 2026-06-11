@@ -21,6 +21,7 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 ## Features
 
 - **Mission-control GUI** — dark, modern desktop app (Edge WebView2). Drag & drop any number of PDFs, watch a live feed of the indexing run, get a rendered mission report at the end.
+- **YouTube channel mode** — paste a channel URL and every published video's transcript is downloaded in bulk (manual captions preferred, auto-captions fallback) and indexed exactly like script PDFs. Transcripts are cached on disk, so re-running after new uploads only fetches what's new.
 - **AI-powered subject identification** — scripts without an explicit `Vehicle in Context:` label are read and classified by [Claude Code](https://claude.com/claude-code) running headlessly. No API key required; it uses your existing Claude Code installation.
 - **True incremental updates** — entries are matched against the master list by normalized title (with fuzzy near-miss review), so re-running on an updated export only appends what's new. Your existing rows are never touched or regenerated.
 - **Multi-document runs** — queue several PDFs; each is processed in order and deduplicated against entries appended from the previous ones.
@@ -33,8 +34,11 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 ```mermaid
 flowchart LR
     A["PDF export(s)"] --> B[GUI<br/>pywebview app]
+    A2["YouTube channel URL"] --> B
     B -->|headless run| C[Claude Code CLI]
     C --> D[extract_tabs.py<br/>PDF → structured tabs]
+    C --> D2[fetch_channel.py<br/>channel → transcript tabs]
+    D2 --> E
     D --> E[compare.py<br/>dedupe vs master]
     E --> F[Claude identifies<br/>vehicles for new tabs]
     F --> G[append_master.py<br/>format-preserving append]
@@ -50,6 +54,7 @@ The deterministic steps (parsing, deduplication, document surgery) are plain Pyt
 ├── SKILL.md                  # Claude Code skill: the orchestration playbook
 ├── scripts/
 │   ├── extract_tabs.py       # PDF → JSON (tab, title, vehicle label, snippet) + anomaly report
+│   ├── fetch_channel.py      # YouTube channel → bulk transcripts + the same JSON schema
 │   ├── compare.py            # Buckets tabs: matched / uncertain / new vs the master list
 │   └── append_master.py      # Appends rows to the .docx, cloning formatting from existing rows
 ├── assets/
@@ -83,9 +88,9 @@ Optionally, send `launcher.bat` to your desktop as a shortcut.
 ### Desktop app
 
 1. Double-click `launcher.bat` (or drag PDFs straight onto it).
-2. Drop your script PDF export(s) into the drop zone.
+2. Drop your script PDF export(s) into the drop zone, and/or paste a YouTube channel URL — either source works alone, or both together (PDFs are processed first).
 3. Confirm the master list path — created automatically if it doesn't exist.
-4. **START INDEXING** and watch the mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects.
+4. **START INDEXING** and watch the mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects. A first channel run also downloads every transcript (~2 s per video); later runs reuse the cache and only fetch new uploads.
 5. Review the mission report, then *Open master list*.
 
 ### As a Claude Code skill
@@ -100,7 +105,9 @@ or simply: *"add the new scripts from this PDF to my master list."*
 
 ### Expected input
 
-A PDF exported from a Google Doc that uses **document tabs**, where each tab holds one script: the title on the first line, an optional `Vehicle in Context:` label, then the script body. Export via **File → Download → PDF** in Google Docs.
+**PDF:** exported from a Google Doc that uses **document tabs**, where each tab holds one script: the title on the first line, an optional `Vehicle in Context:` label, then the script body. Export via **File → Download → PDF** in Google Docs.
+
+**YouTube channel:** any channel URL form works — `youtube.com/@Handle`, `/channel/UC…`, `/c/Name` or `/user/Name`. The tool reads the channel's *Videos* tab; entries are numbered in upload order (1 = oldest) so numbering stays stable as you publish. Videos without any captions are reported and skipped.
 
 ## Configuration
 

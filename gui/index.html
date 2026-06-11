@@ -119,6 +119,7 @@
     font-size: 12.5px; outline: none; min-width: 0;
   }
   input[type=text]:focus { border-color: rgba(245,158,11,.55); }
+  #channel { width: 100%; }
   .btn {
     background: #1a2433; color: var(--txt); border: 1px solid var(--line);
     border-radius: 8px; padding: 8px 13px; font-size: 12.5px; cursor: pointer;
@@ -227,6 +228,14 @@
     </div>
 
     <div class="card">
+      <h2>YOUTUBE CHANNEL</h2>
+      <input type="text" id="channel" spellcheck="false"
+             placeholder="https://www.youtube.com/@YourChannel">
+      <div class="note">Optional — every published video's transcript is downloaded
+        (auto-captions when needed) and indexed like a script PDF. Re-runs only fetch new videos.</div>
+    </div>
+
+    <div class="card">
       <h2>MASTER LIST</h2>
       <div class="mrow">
         <input type="text" id="master" spellcheck="false">
@@ -251,7 +260,7 @@
   <div class="right">
     <div class="card" id="console-card">
       <h2>MISSION FEED</h2>
-      <div id="feed"><div class="ln meta">Awaiting orders. Add at least one PDF and press start.</div></div>
+      <div id="feed"><div class="ln meta">Awaiting orders. Add a PDF or a channel URL and press start.</div></div>
     </div>
     <div class="card" id="result">
       <div class="banner" id="result-banner">◈ MISSION COMPLETE</div>
@@ -330,11 +339,12 @@ function log(text, cls) {
 /* ---------- start / stop ---------- */
 async function startOrStop() {
   if (running) { pywebview.api.cancel(); return; }
-  if (!pdfs.length) { log('Add at least one PDF first.', 'err'); return; }
+  const channel = $('channel').value.trim();
+  if (!pdfs.length && !channel) { log('Add at least one PDF or a YouTube channel URL first.', 'err'); return; }
   const master = $('master').value.trim();
   if (!master.toLowerCase().endsWith('.docx')) { log('Master list must be a .docx path.', 'err'); return; }
 
-  const err = await pywebview.api.start(pdfs, master, includeAngle);
+  const err = await pywebview.api.start(pdfs, master, includeAngle, channel);
   if (err) { log(err, 'err'); return; }
 
   running = true;
@@ -344,7 +354,11 @@ async function startOrStop() {
   $('start').textContent = '■  ABORT';
   $('start').classList.add('stop');
   $('scan').classList.add('on');
-  log(`${pdfs.length} document(s) queued → ${master}`, 'meta');
+  const srcs = [];
+  if (pdfs.length) srcs.push(`${pdfs.length} document(s)`);
+  if (channel) srcs.push('1 channel');
+  log(`${srcs.join(' + ')} queued → ${master}`, 'meta');
+  if (channel) log('First channel run fetches every transcript — this can take a few minutes.', 'meta');
   log('─'.repeat(60), 'meta');
 }
 
@@ -420,6 +434,7 @@ function showResult(text) {
 window.addEventListener('pywebviewready', async () => {
   const d = await pywebview.api.defaults();
   $('master').value = d.master;
+  if (d.channel) $('channel').value = d.channel;
   if (d.include_angle) toggleAngle();
   if (d.initial_pdfs && d.initial_pdfs.length) addFiles(d.initial_pdfs);
   if (!d.claude) log("WARNING: 'claude' command not found on PATH — install Claude Code first.", 'err');

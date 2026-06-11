@@ -7,8 +7,10 @@ identify vehicles, and append new entries to the Word master list.
 Launch:  pythonw app.py [pdf1] [pdf2] ...
 (Dragging PDFs onto the desktop launcher .bat passes them as arguments.)
 """
+import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,23 +38,34 @@ def default_master():
     return m or os.path.join(os.path.expanduser("~"), "Documents", "Script Index.docx")
 
 
-def remember_settings(master, include_angle):
+def remember_settings(master, include_angle, channel=""):
     try:
         with open(CONFIG, "w", encoding="utf-8") as f:
-            json.dump({"master": master, "include_angle": include_angle}, f, indent=1)
+            json.dump({"master": master, "include_angle": include_angle,
+                       "channel": channel}, f, indent=1)
     except OSError:
         pass
 
 PROMPT_TEMPLATE = (
-    'Read the file "{skill}" and follow its workflow to index video-script PDFs into the '
-    'master Word list at "{master}". Process these PDFs IN ORDER, completing the full '
-    "workflow (extract, compare, identify vehicles, append) for each one before starting "
-    "the next, so later PDFs are deduplicated against entries appended from earlier ones:\n"
-    "{pdf_list}\n"
+    'Read the file "{skill}" and follow its workflow to index video scripts into the '
+    'master Word list at "{master}".\n{sources}\n'
     "Work fully autonomously - never ask questions; make sensible decisions yourself. "
-    "When finished, print a combined summary in markdown: tabs found per PDF, how many "
-    "were already in the master, how many were appended (list each new title with its "
-    "vehicle), and any anomalies the user should fix in their Google Docs."
+    "When finished, print a combined summary in markdown: scripts/videos found per source, "
+    "how many were already in the master, how many were appended (list each new title with "
+    "its vehicle), and any anomalies: things the user should fix in their Google Docs, or "
+    "videos skipped because they have no captions."
+)
+
+PDF_SOURCE = (
+    "Process these PDFs IN ORDER, completing the full workflow (extract, compare, identify "
+    "vehicles, append) for each one before starting the next, so later PDFs are "
+    "deduplicated against entries appended from earlier ones:\n{pdf_list}"
+)
+
+CHANNEL_SOURCE = (
+    "Follow the skill's channel mode for the YouTube channel \"{url}\": fetch every "
+    "video's transcript with fetch_channel.py, then run the same compare / identify / "
+    "append workflow on the result."
 )
 
 ANGLE_CLAUSE = (
@@ -82,6 +95,7 @@ class Api:
     def defaults(self):
         return {"master": default_master(),
                 "include_angle": bool(load_config().get("include_angle")),
+                "channel": load_config().get("channel", ""),
                 "claude": bool(shutil.which("claude")),
                 "initial_pdfs": self._initial_pdfs}
 
@@ -109,12 +123,17 @@ class Api:
         if self._proc and self._proc.poll() is None:
             self._proc.kill()
 
-    def start(self, pdfs, master, include_angle=False):
+    def start(self, pdfs, master, include_angle=False, channel=""):
         """Validate and launch. Returns an error string, or None if started."""
         pdfs = [p.strip().strip('"') for p in pdfs]
         master = master.strip().strip('"')
-        if not pdfs:
-            return "Add at least one PDF first."
+        channel = (channel or "").strip().strip('"')
+        if not pdfs and not channel:
+            return "Add at least one PDF or a YouTube channel URL first."
+        if channel and not re.search(r"(youtube\.com|youtu\.be)/\S", channel, re.I):
+            return f"That doesn't look like a YouTube channel URL: {channel}"
+        if channel and importlib.util.find_spec("yt_dlp") is None:
+            return "Channel mode needs yt-dlp. Run: pip install yt-dlp"
         if not master.lower().endswith(".docx"):
             return "The master list must be a .docx path."
         for p in pdfs:
@@ -126,9 +145,20 @@ class Api:
         if not claude:
             return "The 'claude' command is not on PATH. Install Claude Code first."
 
-        remember_settings(master, bool(include_angle))
-        pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
-        prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master, pdf_list=pdf_list)
+        remember_settings(master, bool(include_angle), channel)
+        sources = []
+        if pdfs:
+            pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
+            sources.append(PDF_SOURCE.format(pdf_list=pdf_list))
+        if channel:
+            clause = CHANNEL_SOURCE.format(url=channel)
+            if pdfs:
+                clause = ("After all PDFs are fully processed and appended: " + clause +
+                          " This dedupes the channel's videos against the entries the "
+                          "PDFs just added.")
+            sources.append(clause)
+        prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master,
+                                        sources="\n\n".join(sources))
         if include_angle:
             prompt += ANGLE_CLAUSE
         cmd = [claude, "-p", prompt,
