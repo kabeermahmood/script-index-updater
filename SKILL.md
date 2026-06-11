@@ -1,14 +1,16 @@
 ---
 name: index-scripts
-description: Build or update a Word master list of YouTube video scripts (title + vehicle in context) from a Google Docs PDF export or directly from a YouTube channel URL. Use this whenever the user provides a PDF of script tabs OR a channel URL and wants the videos indexed, catalogued, or added to their existing list — including phrases like "index these scripts", "add the new scripts to the list", "update the master list", "make the title/vehicle list from this PDF", "index my channel", "download all the transcripts from this channel and index them". Appends only NEW entries to the existing master; never rebuilds it from scratch.
+description: Build or update a Word master list of YouTube video scripts (title + the script's hero — the vehicle/ship/aircraft/weapon it's about — plus optional story context) from a Google Docs PDF export or directly from a YouTube channel URL. Use this whenever the user provides a PDF of script tabs OR a channel URL and wants the videos indexed, catalogued, or added to their existing list — including phrases like "index these scripts", "add the new scripts to the list", "update the master list", "make the title/vehicle list from this PDF", "index my channel", "download all the transcripts from this channel and index them". Appends only NEW entries to the existing master; never rebuilds it from scratch.
 ---
 
 # Index Scripts: PDF or YouTube channel → Word master list
 
 Turn a Google Docs PDF export of video-script tabs — or every video
 transcript on a YouTube channel — into rows of
-**Tab # | Video Title | Vehicle in Context** in a Word master list,
-appending only the scripts that are not already in the list.
+**Tab # | Video Title | Hero in Context** in a Word master list, appending
+only the scripts that are not already in the list. The "hero" is whatever
+the channel features — vehicles, ships, aircraft, weapons. (Existing master
+lists may label this column "Vehicle in Context"; same column, keep using it.)
 
 ## Inputs
 
@@ -34,7 +36,7 @@ python <skill>/scripts/extract_tabs.py "<pdf>" tabs.json dump.txt
 ```
 
 Produces `tabs.json` with one record per tab: `{tab, title, vic, snippet}`.
-`vic` is the script's explicit "Vehicle in Context:" label when present
+`vic` is the script's explicit "Vehicle/Ship/Weapon in Context:" label when present
 (often empty). `dump.txt` is the full PDF text for deeper lookups.
 
 **Handle the reported anomalies before moving on:**
@@ -67,12 +69,12 @@ Step 2 exactly as for a PDF. Channel-mode notes:
 - `tab` numbers are upload order (1 = oldest video), so they stay stable as
   new videos are published. Titles are the video titles verbatim.
 - Each record carries a `transcript_file` path — in Step 3, read that file
-  (instead of `dump.txt`) when the snippet doesn't reveal the vehicle.
+  (instead of `dump.txt`) when the snippet doesn't reveal the hero.
 - Transcripts are cached on disk; re-running after new uploads only fetches
   the new videos. A large channel takes ~2s per uncached video — for a first
   run over hundreds of videos, warn the user it will take a few minutes.
 - Auto-captions lack punctuation and may mis-hear designations
-  ("Bismarck" → "bismark") — fine for identifying the vehicle, but never
+  ("Bismarck" → "bismark") — fine for identifying the hero, but never
   copy designations from the transcript without sanity-checking the spelling.
 - Videos with no captions at all are listed in `anomalies` — report them at
   the end; there is nothing to fix.
@@ -96,39 +98,50 @@ Duplicate titles *within* the PDF can also appear (the same script pasted in
 two tabs). If two new tabs have near-identical titles, include both but mark
 the later one `(duplicate of Tab N)` so the user can clean up their doc.
 
-### Step 3 — Identify the vehicle for each NEW tab
+### Step 3 — Identify the HERO of each NEW tab
+
+Every script has a **hero**: the specific named subject the story is about.
+What kind of thing the hero is depends on the channel — tanks and armoured
+cars on a vehicles channel, battleships and cruisers on a naval channel,
+rifles and missiles on a weapons channel, aircraft on an aviation channel.
+Infer the channel's domain from the titles; never force one category.
 
 For every entry in the `new` bucket (plus accepted uncertains):
 
-- If `vic` is non-empty, use the vehicle name from it — just the designation,
+- If `vic` is non-empty, use the hero name from it — just the designation,
   drop trailing descriptions after a dash (e.g. "FV4201 Chieftain — 1960s
   British MBT…" → "FV4201 Chieftain").
-- Otherwise identify the featured vehicle from the title + snippet. It is the
-  specific named vehicle/weapon the script is about, not ones mentioned in
-  passing. Use the most specific common designation ("Sherman Crab",
-  "Supacat Jackal (HMT 400)", "FV432 Mk3 Bulldog").
+- Otherwise identify the hero from the title + snippet. It is the specific
+  named vehicle/ship/aircraft/weapon the script is about, not ones mentioned
+  in passing. Use the most specific common designation ("Sherman Crab",
+  "HMS Belfast", "Supacat Jackal (HMT 400)", "FG 42").
 - If the snippet doesn't name it, read further into that script in `dump.txt`
-  (the vehicle is usually named within the first two pages).
+  (or the entry's `transcript_file` in channel mode) — the hero is usually
+  named within the first two pages.
 - If there are more than ~25 new tabs, split the work across 3–4 parallel
   general-purpose agents (give each a slice of the records and the dump path;
-  have them return `tab|title|vehicle` lines).
+  have them return `tab|title|hero` lines).
 
 Clean each title: strip stray `Title:` prefixes, outer quotes, leading digits,
 and any leaked `Context:` fragments. Keep the title otherwise verbatim.
 
-**Optional — angle/summary:** when the user asked for it (the GUI's
-"Angle / summary column" toggle, or a request like "include summaries"),
-also write an `angle` for each new entry: 1–2 sentences (max ~30 words)
-capturing the script's specific hook — the story it tells about the vehicle
-(e.g. "A written-off armoured car becomes Burma's most feared convoy
-escort"), never a generic description of the vehicle.
+**Optional — story context:** when the user asked for it (the GUI's
+"Story context column" toggle, or a request like "include summaries"),
+also write an `angle` for each new entry: 2–3 sentences (~40–60 words)
+that give the context of the script's story — what actually happens, the
+hook, and why it matters (e.g. "A written-off armoured car is rebuilt by
+its crew and becomes Burma's most feared convoy escort. The script follows
+its final ambush on the Tiddim Road, where it held off an entire infantry
+company."). Never a generic encyclopedia description of the hero.
 
 ### Step 4 — Append to the master
 
 Write the new entries (in tab-number order) to `rows.json` as a list of
-`{"tab": …, "title": …, "vehicle": …}` — plus `"angle": …` when summaries
-were requested (the script then auto-upgrades 3-column masters to 4 columns;
-existing rows keep an empty angle cell) — then:
+`{"tab": …, "title": …, "vehicle": …}` — the `vehicle` key holds the hero
+name whatever its kind (ship, weapon, aircraft…); the key name is historical.
+Add `"angle": …` with the story context when summaries were requested (the
+script then auto-upgrades 3-column masters to 4 columns; existing rows keep
+an empty cell) — then:
 
 ```
 python <skill>/scripts/append_master.py "<master.docx>" rows.json
@@ -144,7 +157,7 @@ user to close it and retry.
 ### Step 5 — Report
 
 Tell the user: how many tabs were in the PDF, how many were already listed,
-how many were appended (with a short table of the new title + vehicle pairs),
+how many were appended (with a short table of the new title + hero pairs),
 plus any anomalies (gaps, duplicates, non-script tabs) they may want to fix
 in their Google Doc. Clean up the temp files.
 

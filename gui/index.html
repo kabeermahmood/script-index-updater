@@ -271,6 +271,19 @@
              placeholder="https://www.youtube.com/@YourChannel">
       <div class="note">Optional — every published video's transcript is downloaded
         (auto-captions when needed) and indexed like a script PDF. Re-runs only fetch new videos.</div>
+      <div class="mrow" style="margin-top:9px">
+        <button class="btn" style="flex:1" onclick="fetchComments()">⬇&nbsp;&nbsp;Fetch all comments</button>
+      </div>
+      <div class="note">Downloads every comment from every video into one JSON file
+        (plus a CSV for Excel), saved next to your master list and named after the channel.
+        Re-runs only fetch new videos.</div>
+      <div class="opt-row" onclick="toggleCommentsTop()">
+        <div class="tswitch" id="tswitch-top"><span class="knob"></span></div>
+        <div>
+          <div class="opt-title">Top 100 comments only</div>
+          <div class="opt-sub">Much faster — fetches each video's 100 most relevant comments instead of every thread.</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -279,12 +292,13 @@
         <input type="text" id="master" spellcheck="false">
         <button class="btn" onclick="pickMaster()">Browse</button>
       </div>
-      <div class="note">New entries are appended. If the file doesn't exist, it's created. Close it in Word before starting.</div>
+      <div class="note">New entries are appended. If the file doesn't exist, it's created. Close it in Word before starting.
+        Channel runs get their own index in this folder, named "&lt;Channel&gt; Script Index.docx".</div>
       <div class="opt-row" onclick="toggleAngle()">
         <div class="tswitch" id="tswitch"><span class="knob"></span></div>
         <div>
-          <div class="opt-title">Angle / summary column</div>
-          <div class="opt-sub">Also write a 1–2 sentence summary of each new script's angle into the list.</div>
+          <div class="opt-title">Story context column</div>
+          <div class="opt-sub">Also write 2–3 sentences on what each new script's story is about into the list.</div>
         </div>
       </div>
     </div>
@@ -330,6 +344,11 @@ function toggleAngle() {
   includeAngle = !includeAngle;
   document.getElementById('tswitch').classList.toggle('on', includeAngle);
 }
+let commentsTop = false;
+function toggleCommentsTop() {
+  commentsTop = !commentsTop;
+  document.getElementById('tswitch-top').classList.toggle('on', commentsTop);
+}
 
 const $ = id => document.getElementById(id);
 
@@ -371,7 +390,8 @@ async function pickMaster() {
   const res = await pywebview.api.pick_master();
   if (res) $('master').value = res;
 }
-function openMaster() { pywebview.api.open_path($('master').value); }
+let openPath = null;  // set by 'output' events (e.g. comments CSV)
+function openMaster() { pywebview.api.open_path(openPath || $('master').value); }
 
 /* ---------- status / feed ---------- */
 function setStatus(mode, text) {
@@ -417,6 +437,29 @@ async function togglePause() {
 }
 function endTask() { if (running) pywebview.api.cancel(); }
 
+function beginRun(statusText) {
+  openPath = null;
+  $('open-master').textContent = 'Open master list';
+  setRunning(true);
+  $('feed').innerHTML = '';
+  $('result').classList.remove('show');
+  setProgress(0, 'Starting up');
+  setNow('');
+  setStatus('run', statusText);
+}
+
+async function fetchComments() {
+  if (running) return;
+  const channel = $('channel').value.trim();
+  if (!channel) { log('Enter a YouTube channel URL first.', 'err'); return; }
+  const err = await pywebview.api.start_comments(channel, $('master').value.trim(), commentsTop);
+  if (err) { log(err, 'err'); return; }
+  beginRun('COMMENTS');
+  log(`Comment extraction queued for ${channel}${commentsTop ? ' (top 100 per video)' : ' (all comments)'}`, 'meta');
+  log('First run downloads every video\'s comments — this can take a while on big channels.', 'meta');
+  log('─'.repeat(60), 'meta');
+}
+
 async function startTask() {
   if (running) return;
   const channel = $('channel').value.trim();
@@ -427,12 +470,7 @@ async function startTask() {
   const err = await pywebview.api.start(pdfs, master, includeAngle, channel);
   if (err) { log(err, 'err'); return; }
 
-  setRunning(true);
-  $('feed').innerHTML = '';
-  $('result').classList.remove('show');
-  setProgress(0, 'Starting up');
-  setNow('');
-  setStatus('run', 'INDEXING');
+  beginRun('INDEXING');
   const srcs = [];
   if (pdfs.length) srcs.push(`${pdfs.length} document(s)`);
   if (channel) srcs.push('1 channel');
@@ -448,6 +486,8 @@ function onEvent(e) {
   else if (e.kind === 'meta') log(e.text, 'meta');
   else if (e.kind === 'err') log(e.text, 'err');
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
+  else if (e.kind === 'master') $('master').value = e.path;
+  else if (e.kind === 'output') { openPath = e.path; $('open-master').textContent = e.label || 'Open file'; }
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
     setRunning(false);
@@ -515,6 +555,7 @@ window.addEventListener('pywebviewready', async () => {
   $('master').value = d.master;
   if (d.channel) $('channel').value = d.channel;
   if (d.include_angle) toggleAngle();
+  if (d.comments_top) toggleCommentsTop();
   if (d.initial_pdfs && d.initial_pdfs.length) addFiles(d.initial_pdfs);
   if (!d.claude) log("WARNING: 'claude' command not found on PATH — install Claude Code first.", 'err');
 });

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 import webview
 
@@ -40,35 +41,40 @@ def default_master():
     return m or os.path.join(os.path.expanduser("~"), "Documents", "Script Index.docx")
 
 
-def remember_settings(master, include_angle, channel=""):
+def remember_settings(**settings):
+    """Merge the given keys into config.json, preserving the others."""
+    cfg = load_config()
+    cfg.update(settings)
     try:
         with open(CONFIG, "w", encoding="utf-8") as f:
-            json.dump({"master": master, "include_angle": include_angle,
-                       "channel": channel}, f, indent=1)
+            json.dump(cfg, f, indent=1)
     except OSError:
         pass
 
 PROMPT_TEMPLATE = (
     'Read the file "{skill}" and follow its workflow to index video scripts into the '
-    'master Word list at "{master}".\n{sources}\n'
+    "Word master list specified for each source below.\n{sources}\n"
     "Work fully autonomously - never ask questions; make sensible decisions yourself. "
     "When finished, print a combined summary in markdown: scripts/videos found per source, "
     "how many were already in the master, how many were appended (list each new title with "
-    "its vehicle), and any anomalies: things the user should fix in their Google Docs, or "
-    "videos skipped because they have no captions."
+    "its hero - the ship/vehicle/aircraft/weapon the script is about), and any anomalies: "
+    "things the user should fix in their Google Docs, or videos skipped because they have "
+    "no captions."
 )
 
 PDF_SOURCE = (
-    "Process these PDFs IN ORDER, completing the full workflow (extract, compare, identify "
-    "vehicles, append) for each one before starting the next, so later PDFs are "
-    "deduplicated against entries appended from earlier ones:\n{pdf_list}"
+    'Process these PDFs IN ORDER into the master list at "{master}", completing the full '
+    "workflow (extract, compare, identify each script's hero, append) for each one before "
+    "starting the next, so later PDFs are deduplicated against entries appended from "
+    "earlier ones:\n{pdf_list}"
 )
 
 CHANNEL_SOURCE = (
-    "Index the YouTube channel \"{url}\" following the skill's channel mode. The "
-    "transcripts are ALREADY FETCHED: \"{tabs}\" is the channel's tabs.json and the "
-    "transcripts folder sits next to it. Do NOT run fetch_channel.py again - continue "
-    "from Step 2 (compare / identify / append) on that tabs.json."
+    "Index the YouTube channel \"{url}\" into the master list at \"{master}\", following "
+    "the skill's channel mode. The transcripts are ALREADY FETCHED: \"{tabs}\" is the "
+    "channel's tabs.json and the transcripts folder sits next to it. Do NOT run "
+    "fetch_channel.py again - continue from Step 2 (compare / identify / append) on "
+    "that tabs.json."
 )
 
 PROGRESS_CLAUSE = (
@@ -82,11 +88,11 @@ PROGRESS_CLAUSE = (
 PHASE_RE = re.compile(r"^PHASE\s+(\d+)\s*/\s*(\d+)\s*[-—:]\s*(.+?)\s*$", re.M)
 
 ANGLE_CLAUSE = (
-    "\n\nThe user enabled the Angle/Summary column. For EVERY new entry, also write an "
-    '"angle" field in rows.json: a concise 1-2 sentence summary (max ~30 words) of the '
-    "script's specific angle or hook - the particular story it tells about the vehicle, "
-    "not a generic description of the vehicle itself. append_master.py automatically "
-    "adds and fills the 'Angle / Summary' column (existing rows keep an empty cell)."
+    "\n\nThe user enabled the Story Context column. For EVERY new entry, also write an "
+    '"angle" field in rows.json: 2-3 sentences (~40-60 words) of story context - what '
+    "actually happens in the script, its hook, and why it matters. Never a generic "
+    "encyclopedia description of the hero. append_master.py automatically adds and "
+    "fills this column (existing rows keep an empty cell)."
 )
 
 
@@ -98,6 +104,8 @@ class Api:
         self._paused = False
         self._initial_pdfs = initial_pdfs
         self._pbase, self._pspan = 0, 100  # Claude's slice of the progress bar
+        self._master = ""
+        self._report_name = ""
 
     # ---------- helpers ----------
     def _emit(self, **payload):
@@ -108,9 +116,11 @@ class Api:
 
     # ---------- exposed to JS ----------
     def defaults(self):
+        cfg = load_config()
         return {"master": default_master(),
-                "include_angle": bool(load_config().get("include_angle")),
-                "channel": load_config().get("channel", ""),
+                "include_angle": bool(cfg.get("include_angle")),
+                "comments_top": bool(cfg.get("comments_top")),
+                "channel": cfg.get("channel", ""),
                 "claude": bool(shutil.which("claude")),
                 "initial_pdfs": self._initial_pdfs}
 
@@ -197,13 +207,91 @@ class Api:
         if not claude:
             return "The 'claude' command is not on PATH. Install Claude Code first."
 
-        remember_settings(master, bool(include_angle), channel)
+        remember_settings(master=master, include_angle=bool(include_angle),
+                          channel=channel)
         self._cancelled = False
         self._paused = False
         threading.Thread(target=self._run_job,
                          args=(claude, pdfs, master, bool(include_angle), channel),
                          daemon=True).start()
         return None
+
+    def start_comments(self, channel, master="", top_only=False):
+        """Validate and launch a comments-extraction run. Returns error or None."""
+        channel = (channel or "").strip().strip('"')
+        master = (master or "").strip().strip('"')
+        if not channel:
+            return "Enter a YouTube channel URL first."
+        if not re.search(r"(youtube\.com|youtu\.be)/\S", channel, re.I):
+            return f"That doesn't look like a YouTube channel URL: {channel}"
+        if importlib.util.find_spec("yt_dlp") is None:
+            return "Comment extraction needs yt-dlp. Run: pip install yt-dlp"
+        csv_dir = os.path.dirname(master) if master else os.path.expanduser("~")
+        remember_settings(channel=channel, comments_top=bool(top_only))
+        self._cancelled = False
+        self._paused = False
+        threading.Thread(target=self._run_comments_job,
+                         args=(channel, csv_dir, 0, bool(top_only)),
+                         daemon=True).start()
+        return None
+
+    def _run_comments_job(self, channel, csv_dir, max_videos=0, top_only=False):
+        """Stream fetch_comments.py: per-video progress, then the CSV export."""
+        try:
+            script = os.path.normpath(os.path.join(HERE, "..", "scripts",
+                                                   "fetch_comments.py"))
+            cmd = [sys.executable, "-u", script, channel,
+                   self._channel_dir(channel), "--csv-dir", csv_dir]
+            if top_only:
+                cmd += ["--max-comments", "100"]
+            if max_videos:
+                cmd += ["--max", str(max_videos)]
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            self._emit(kind="progress", pct=0, label="Listing channel videos")
+            self._proc = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=flags, env=env)
+            json_path, csv_path, summary = "", "", ""
+            for line in self._proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                m = re.match(r"\[(\d+)/(\d+)\]", line)
+                if m:
+                    n, total = int(m.group(1)), int(m.group(2))
+                    self._emit(kind="progress", pct=round(100 * n / max(total, 1), 1),
+                               label=f"Fetching comments ({n}/{total})")
+                    self._emit(kind="tool", text=line)
+                elif line.startswith("JSON saved: "):
+                    json_path = line[len("JSON saved: "):].strip()
+                    self._emit(kind="meta", text=line)
+                elif line.startswith("CSV saved: "):
+                    csv_path = line[len("CSV saved: "):].strip()
+                    self._emit(kind="meta", text=line)
+                elif line.startswith("SUMMARY: "):
+                    summary = line[len("SUMMARY: "):].strip()
+                else:
+                    self._emit(kind="meta", text=line)
+            code = self._proc.wait()
+            ok = code == 0 and not self._cancelled and bool(json_path)
+            if ok:
+                stats = dict(kv.split("=") for kv in summary.split() if "=" in kv)
+                self._emit(kind="progress", pct=100, label="Comments exported")
+                self._emit(kind="output", path=json_path, label="Open comments JSON")
+                self._emit(kind="result", text=(
+                    f"## Comments export complete\n\n"
+                    f"- **Videos covered:** {stats.get('videos', '?')} "
+                    f"({stats.get('fetched', '?')} fetched, {stats.get('cached', '?')} cached, "
+                    f"{stats.get('failed', '?')} failed)\n"
+                    f"- **Comments exported:** {stats.get('comments', '?')}\n"
+                    f"- **JSON (for AI analysis):** `{json_path}`\n"
+                    f"- **CSV (for Excel):** `{csv_path}`"))
+            self._emit(kind="done", ok=ok, cancelled=self._cancelled)
+        except Exception as e:
+            self._emit(kind="err", text=f"ERROR: {e}")
+            self._emit(kind="done", ok=False, cancelled=self._cancelled)
 
     # ---------- worker ----------
     @staticmethod
@@ -215,39 +303,55 @@ class Api:
         """Stage 1: fetch channel transcripts (live per-video progress).
         Stage 2: headless Claude run over PDFs and/or the fetched channel."""
         try:
-            chan_tabs = None
+            self._master = master
+            self._report_name = ""
+            chan_tabs, chan_master = None, master
             if channel:
                 fetch_span = (0, 50) if pdfs else (0, 60)
                 if not self._fetch_channel(channel, fetch_span):
                     self._emit(kind="done", ok=False, cancelled=self._cancelled)
                     return
                 chan_tabs = os.path.join(self._channel_dir(channel), "tabs.json")
+                try:
+                    with open(chan_tabs, encoding="utf-8") as f:
+                        self._report_name = (json.load(f).get("channel") or "").strip()
+                except (OSError, ValueError):
+                    pass
+                if self._report_name:
+                    # every channel gets its own index, named after the channel
+                    safe = re.sub(r'[<>:"/\\|?*]', "", self._report_name).strip()
+                    chan_master = os.path.join(os.path.dirname(master) or ".",
+                                               f"{safe} Script Index.docx")
+                    self._master = chan_master
+                    self._emit(kind="meta", text=f"Channel index: {chan_master}")
+                    self._emit(kind="master", path=chan_master)
                 self._pbase = fetch_span[1]
                 self._pspan = 100 - self._pbase
             else:
                 self._pbase, self._pspan = 0, 100
+            if not self._report_name:  # PDF-only run: name after the master list
+                self._report_name = os.path.splitext(os.path.basename(master))[0]
 
             sources = []
             if pdfs:
                 pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
-                sources.append(PDF_SOURCE.format(pdf_list=pdf_list))
+                sources.append(PDF_SOURCE.format(master=master, pdf_list=pdf_list))
             if channel:
-                clause = CHANNEL_SOURCE.format(url=channel, tabs=chan_tabs)
-                if pdfs:
-                    clause = ("After all PDFs are fully processed and appended: " + clause +
-                              " This dedupes the channel's videos against the entries the "
-                              "PDFs just added.")
-                sources.append(clause)
-            prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master,
+                sources.append(CHANNEL_SOURCE.format(url=channel, master=chan_master,
+                                                     tabs=chan_tabs))
+            prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD,
                                             sources="\n\n".join(sources))
             if include_angle:
                 prompt += ANGLE_CLAUSE
             prompt += PROGRESS_CLAUSE
             self._emit(kind="progress", pct=self._pbase, label="Analyzing scripts")
-            cmd = [claude, "-p", prompt,
+            # The prompt goes via stdin: on Windows the claude CLI is a .cmd
+            # shim, and cmd.exe truncates argv at the first newline, silently
+            # dropping most of the prompt.
+            cmd = [claude, "-p",
                    "--output-format", "stream-json", "--verbose",
                    "--allowedTools", ALLOWED_TOOLS]
-            self._run(cmd)
+            self._run(cmd, prompt)
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=self._cancelled)
@@ -287,14 +391,21 @@ class Api:
         self._emit(kind="progress", pct=span[1], label="Transcripts ready")
         return True
 
-    def _run(self, cmd):
+    def _run(self, cmd, prompt=None):
         try:
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             self._proc = subprocess.Popen(
-                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                cmd,
+                stdin=subprocess.PIPE if prompt else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 errors="replace", creationflags=flags,
                 cwd=os.path.expanduser("~"))
+            if prompt:
+                try:
+                    self._proc.stdin.write(prompt)
+                finally:
+                    self._proc.stdin.close()
             got_result = False
             for line in self._proc.stdout:
                 got_result = self._handle_line(line) or got_result
@@ -340,9 +451,24 @@ class Api:
         elif etype == "result":
             text = evt.get("result")
             if text:
+                self._save_report(text.strip())
                 self._emit(kind="result", text=text.strip())
                 return True
         return False
+
+    def _save_report(self, text):
+        """Persist the mission report, named after the channel (or master list)."""
+        try:
+            rdir = os.path.join(os.path.dirname(self._master) or ".", "Mission Reports")
+            os.makedirs(rdir, exist_ok=True)
+            name = re.sub(r'[<>:"/\\|?*]', "", self._report_name).strip() or "Run"
+            stamp = time.strftime("%Y-%m-%d %H.%M")
+            path = os.path.join(rdir, f"{name} - {stamp}.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._emit(kind="meta", text=f"Mission report saved: {path}")
+        except OSError as e:
+            self._emit(kind="err", text=f"Could not save the report: {e}")
 
 
 def apply_window_icon(window):
