@@ -1,0 +1,12 @@
+# local user settings
+gui/config.json
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# OS
+Thumbs.db
+.DS_Store
