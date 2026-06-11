@@ -174,7 +174,34 @@ class Api:
         return False
 
 
+def apply_window_icon(window):
+    """Set the title-bar and taskbar icon (Windows only)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ico = os.path.normpath(os.path.join(HERE, "..", "assets", "icon.ico"))
+        if not os.path.exists(ico):
+            return
+        hwnd = int(window.native.Handle.ToInt64())
+        IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
+        for size, which in ((16, 0), (48, 1)):
+            h = ctypes.windll.user32.LoadImageW(
+                None, ico, IMAGE_ICON, size, size, LR_LOADFROMFILE)
+            if h:
+                ctypes.windll.user32.SendMessageW(hwnd, WM_SETICON, which, h)
+    except Exception:
+        pass
+
+
 def main():
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "TalhaHamdees.ScriptIndexUpdater")
+        except Exception:
+            pass
     initial = [a.strip().strip('"') for a in sys.argv[1:]
                if a.lower().strip().strip('"').endswith(".pdf")]
     api = Api(initial)
@@ -185,6 +212,7 @@ def main():
         width=1000, height=680, min_size=(820, 560),
         background_color="#0b0f14")
     api._window = window
+    window.events.shown += lambda *a: apply_window_icon(window)
     webview.start()
 
 

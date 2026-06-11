@@ -1,0 +1,26 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Script Index Updater</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#16202e"/>
+<stop offset="1" stop-color="#0a0e15"/>
+</linearGradient>
+<linearGradient id="sweep" x1="138" y1="62" x2="200" y2="105" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#f5a623" stop-opacity="0.04"/>
+<stop offset="1" stop-color="#ffcd5f" stop-opacity="0.85"/>
+</linearGradient>
+</defs>
+<rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)" stroke="#3a4c62" stroke-width="3"/>
+<path d="M128,128 L128,52.5 A75.5,75.5 0 0 1 199.8,104.7 Z" fill="url(#sweep)"/>
+<circle cx="128" cy="128" r="75.5" fill="none" stroke="#f5a623" stroke-width="5.5" opacity="0.92"/>
+<circle cx="128" cy="128" r="47.4" fill="none" stroke="#f5a623" stroke-width="2.75" opacity="0.43"/>
+<g stroke="#f8c46a" stroke-width="3.75" opacity="0.63" stroke-linecap="round">
+<line x1="128" y1="43.75" x2="128" y2="61.25"/>
+<line x1="128" y1="194.75" x2="128" y2="212.25"/>
+<line x1="43.75" y1="128" x2="61.25" y2="128"/>
+<line x1="194.75" y1="128" x2="212.25" y2="128"/>
+</g>
+<circle cx="128" cy="128" r="10.2" fill="#f5a623"/>
+<circle cx="170.4" cy="82.5" r="11.7" fill="none" stroke="#ffc86e" stroke-width="1.75" opacity="0.5"/>
+<circle cx="170.4" cy="82.5" r="6.9" fill="#ffc86e"/>
+</svg>

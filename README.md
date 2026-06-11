@@ -1,4 +1,7 @@
-# Script Index Updater
+<div align="center">
+  <img src="assets/icon.png" width="128" alt="Script Index Updater — amber radar logo">
+  <h1>Script Index Updater</h1>
+</div>
 
 > Turn a Google Docs tab-export PDF of video scripts into a clean, deduplicated Word index — automatically.
 
