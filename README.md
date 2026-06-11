@@ -12,6 +12,10 @@
 
 Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports, and it extracts every script tab, identifies the vehicle each script is about (even when it isn't labelled), and appends **only the new entries** to a formatted Word master list.
 
+<div align="center">
+  <img src="docs/screenshot.png" width="820" alt="Script Index Updater main window — dark mission-control UI with drop zone, master list field, and live mission feed">
+</div>
+
 ## Features
 
 - **Mission-control GUI** — dark, modern desktop app (Edge WebView2). Drag & drop any number of PDFs, watch a live feed of the indexing run, get a rendered mission report at the end.
