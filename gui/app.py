@@ -244,10 +244,13 @@ class Api:
                 prompt += ANGLE_CLAUSE
             prompt += PROGRESS_CLAUSE
             self._emit(kind="progress", pct=self._pbase, label="Analyzing scripts")
-            cmd = [claude, "-p", prompt,
+            # The prompt goes via stdin: on Windows the claude CLI is a .cmd
+            # shim, and cmd.exe truncates argv at the first newline, silently
+            # dropping most of the prompt.
+            cmd = [claude, "-p",
                    "--output-format", "stream-json", "--verbose",
                    "--allowedTools", ALLOWED_TOOLS]
-            self._run(cmd)
+            self._run(cmd, prompt)
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=self._cancelled)
@@ -287,14 +290,21 @@ class Api:
         self._emit(kind="progress", pct=span[1], label="Transcripts ready")
         return True
 
-    def _run(self, cmd):
+    def _run(self, cmd, prompt=None):
         try:
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             self._proc = subprocess.Popen(
-                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                cmd,
+                stdin=subprocess.PIPE if prompt else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 errors="replace", creationflags=flags,
                 cwd=os.path.expanduser("~"))
+            if prompt:
+                try:
+                    self._proc.stdin.write(prompt)
+                finally:
+                    self._proc.stdin.close()
             got_result = False
             for line in self._proc.stdout:
                 got_result = self._handle_line(line) or got_result
