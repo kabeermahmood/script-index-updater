@@ -94,7 +94,7 @@ Optionally, send `launcher.bat` to your desktop as a shortcut.
 3. Confirm the master list path — created automatically if it doesn't exist.
 4. **START INDEXING** and watch the operation progress bar and mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects. A first channel run also downloads every transcript (~2 s per video); later runs reuse the cache and only fetch new uploads.
 5. While a run is active the start button becomes **⏸ PAUSE** / **■ END** — pause freezes the run completely (resume continues where it left off; avoid very long pauses, the in-flight AI request can time out), end aborts it.
-6. Review the mission report, then *Open master list*.
+6. Review the mission report, then *Open master list*. Every report is also saved as a markdown file named after the channel (or the master list, for PDF-only runs) in a `Mission Reports` folder next to your master list — e.g. `Mission Reports\British Naval History - 2026-06-11 15.30.md`.
 
 ### As a Claude Code skill
 

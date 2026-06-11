@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 import webview
 
@@ -99,6 +100,8 @@ class Api:
         self._paused = False
         self._initial_pdfs = initial_pdfs
         self._pbase, self._pspan = 0, 100  # Claude's slice of the progress bar
+        self._master = ""
+        self._report_name = ""
 
     # ---------- helpers ----------
     def _emit(self, **payload):
@@ -216,6 +219,8 @@ class Api:
         """Stage 1: fetch channel transcripts (live per-video progress).
         Stage 2: headless Claude run over PDFs and/or the fetched channel."""
         try:
+            self._master = master
+            self._report_name = ""
             chan_tabs = None
             if channel:
                 fetch_span = (0, 50) if pdfs else (0, 60)
@@ -223,10 +228,17 @@ class Api:
                     self._emit(kind="done", ok=False, cancelled=self._cancelled)
                     return
                 chan_tabs = os.path.join(self._channel_dir(channel), "tabs.json")
+                try:
+                    with open(chan_tabs, encoding="utf-8") as f:
+                        self._report_name = (json.load(f).get("channel") or "").strip()
+                except (OSError, ValueError):
+                    pass
                 self._pbase = fetch_span[1]
                 self._pspan = 100 - self._pbase
             else:
                 self._pbase, self._pspan = 0, 100
+            if not self._report_name:  # PDF-only run: name after the master list
+                self._report_name = os.path.splitext(os.path.basename(master))[0]
 
             sources = []
             if pdfs:
@@ -351,9 +363,24 @@ class Api:
         elif etype == "result":
             text = evt.get("result")
             if text:
+                self._save_report(text.strip())
                 self._emit(kind="result", text=text.strip())
                 return True
         return False
+
+    def _save_report(self, text):
+        """Persist the mission report, named after the channel (or master list)."""
+        try:
+            rdir = os.path.join(os.path.dirname(self._master) or ".", "Mission Reports")
+            os.makedirs(rdir, exist_ok=True)
+            name = re.sub(r'[<>:"/\\|?*]', "", self._report_name).strip() or "Run"
+            stamp = time.strftime("%Y-%m-%d %H.%M")
+            path = os.path.join(rdir, f"{name} - {stamp}.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._emit(kind="meta", text=f"Mission report saved: {path}")
+        except OSError as e:
+            self._emit(kind="err", text=f"Could not save the report: {e}")
 
 
 def apply_window_icon(window):
