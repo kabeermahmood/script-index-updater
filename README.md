@@ -3,7 +3,7 @@
   <h1>Script Index Updater</h1>
 </div>
 
-> Turn a Google Docs tab-export PDF of video scripts into a clean, deduplicated Word index — automatically.
+> Turn a Google Docs tab-export PDF of video scripts — or an entire YouTube channel — into a clean, deduplicated Word index, automatically.
 
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)
@@ -12,7 +12,7 @@
 
 **🌐 Website: [script-index-updater.vercel.app](https://script-index-updater.vercel.app)**
 
-Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports, and it extracts every script tab, identifies the vehicle each script is about (even when it isn't labelled), and appends **only the new entries** to a formatted Word master list.
+Managing a YouTube channel with a Google Doc holding **90+ script tabs** means one recurring chore: keeping a master index of every video title and its featured subject. This tool automates the entire pipeline — drop in one or more PDF exports **or paste a channel URL**, and it extracts every script (or downloads every video transcript), identifies the vehicle each one is about (even when it isn't labelled), and appends **only the new entries** to a formatted Word master list.
 
 <div align="center">
   <img src="docs/screenshot.png" width="820" alt="Script Index Updater main window — dark mission-control UI with drop zone, master list field, and live mission feed">
@@ -22,6 +22,8 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 
 - **Mission-control GUI** — dark, modern desktop app (Edge WebView2). Drag & drop any number of PDFs, watch a live feed of the indexing run, get a rendered mission report at the end.
 - **YouTube channel mode** — paste a channel URL and every published video's transcript is downloaded in bulk (manual captions preferred, auto-captions fallback) and indexed exactly like script PDFs. Transcripts are cached on disk, so re-running after new uploads only fetches what's new.
+- **Live operation progress** — a real progress bar tracks the whole run: per-video counts while transcripts download (`212/486`), then phase-by-phase updates (extract → compare → identify → append) as Claude works, plus a "happening right now" line showing the current action.
+- **Pause / resume / end controls** — pause genuinely freezes the run (the whole worker process tree is suspended — no CPU, network, or tokens burned), resume picks up exactly where it stopped, and end aborts cleanly even from a paused state.
 - **AI-powered subject identification** — scripts without an explicit `Vehicle in Context:` label are read and classified by [Claude Code](https://claude.com/claude-code) running headlessly. No API key required; it uses your existing Claude Code installation.
 - **True incremental updates** — entries are matched against the master list by normalized title (with fuzzy near-miss review), so re-running on an updated export only appends what's new. Your existing rows are never touched or regenerated.
 - **Multi-document runs** — queue several PDFs; each is processed in order and deduplicated against entries appended from the previous ones.
@@ -35,9 +37,9 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 flowchart LR
     A["PDF export(s)"] --> B[GUI<br/>pywebview app]
     A2["YouTube channel URL"] --> B
+    B -->|"pre-fetch (per-video progress)"| D2[fetch_channel.py<br/>channel → transcript tabs]
     B -->|headless run| C[Claude Code CLI]
     C --> D[extract_tabs.py<br/>PDF → structured tabs]
-    C --> D2[fetch_channel.py<br/>channel → transcript tabs]
     D2 --> E
     D --> E[compare.py<br/>dedupe vs master]
     E --> F[Claude identifies<br/>vehicles for new tabs]
@@ -46,7 +48,7 @@ flowchart LR
     C -->|live stream-json| B
 ```
 
-The deterministic steps (parsing, deduplication, document surgery) are plain Python for speed and reliability. The one step that genuinely needs intelligence — *"which vehicle is this 4,000-word script actually about?"* — is delegated to Claude, orchestrated by the [`SKILL.md`](SKILL.md) playbook.
+The deterministic steps (transcript fetching, parsing, deduplication, document surgery) are plain Python for speed and reliability. The one step that genuinely needs intelligence — *"which vehicle is this 4,000-word script actually about?"* — is delegated to Claude, orchestrated by the [`SKILL.md`](SKILL.md) playbook. Channel transcripts are fetched by the GUI itself before Claude starts, so the progress bar shows exact per-video counts during the slowest part of the run; Claude then announces each workflow phase, which the GUI maps onto the remainder of the bar.
 
 ## Repository layout
 
@@ -90,8 +92,9 @@ Optionally, send `launcher.bat` to your desktop as a shortcut.
 1. Double-click `launcher.bat` (or drag PDFs straight onto it).
 2. Drop your script PDF export(s) into the drop zone, and/or paste a YouTube channel URL — either source works alone, or both together (PDFs are processed first).
 3. Confirm the master list path — created automatically if it doesn't exist.
-4. **START INDEXING** and watch the mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects. A first channel run also downloads every transcript (~2 s per video); later runs reuse the cache and only fetch new uploads.
-5. Review the mission report, then *Open master list*.
+4. **START INDEXING** and watch the operation progress bar and mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects. A first channel run also downloads every transcript (~2 s per video); later runs reuse the cache and only fetch new uploads.
+5. While a run is active the start button becomes **⏸ PAUSE** / **■ END** — pause freezes the run completely (resume continues where it left off; avoid very long pauses, the in-flight AI request can time out), end aborts it.
+6. Review the mission report, then *Open master list*.
 
 ### As a Claude Code skill
 
@@ -99,9 +102,10 @@ Copy (or symlink) this folder to `%USERPROFILE%\.claude\skills\index-scripts`, t
 
 ```
 /index-scripts C:\path\to\Scripts.pdf
+/index-scripts https://www.youtube.com/@YourChannel
 ```
 
-or simply: *"add the new scripts from this PDF to my master list."*
+or simply: *"add the new scripts from this PDF to my master list"* / *"index every video on my channel."*
 
 ### Expected input
 
@@ -111,11 +115,17 @@ or simply: *"add the new scripts from this PDF to my master list."*
 
 ## Configuration
 
-`gui/config.json` (created automatically, not tracked by git) remembers the last-used master list path:
+`gui/config.json` (created automatically, not tracked by git) remembers the last-used settings:
 
 ```json
-{ "master": "C:\\path\\to\\Master Index.docx" }
+{
+ "master": "C:\\path\\to\\Master Index.docx",
+ "include_angle": false,
+ "channel": "https://www.youtube.com/@YourChannel"
+}
 ```
+
+Channel transcripts are cached under `%TEMP%\index-scripts\` (one folder per channel) — delete it to force a full re-download.
 
 ## License
 
