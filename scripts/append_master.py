@@ -2,7 +2,10 @@
 
 Usage: python append_master.py <master_docx> <rows_json>
 
-rows_json is a JSON list of {"tab": <int|str>, "title": str, "vehicle": str}.
+rows_json is a JSON list of {"tab": <int|str>, "title": str, "vehicle": str}
+with an optional "angle" key (a 1-2 sentence summary of the script's angle).
+If any row carries an angle, the master table is upgraded in place from
+3 columns to 4 (header "Angle / Summary"); existing rows get empty cells.
 
 If the master docx does not exist, it is created from the bundled
 assets/master_template.docx (which contains the heading, the styled header
@@ -13,9 +16,12 @@ column widths carry over exactly.
 """
 import sys, os, json, shutil, copy
 import docx
+from docx.oxml.ns import qn
 
 TEMPLATE = os.path.join(os.path.dirname(__file__), "..", "assets", "master_template.docx")
 PLACEHOLDER = "__TAB__"
+ANGLE_HEADER = "Angle / Summary"
+WIDTHS_4 = [600, 4060, 2100, 2600]  # dxa, sums to 9360 like the 3-col layout
 
 
 def set_cell_text(cell, text):
@@ -30,6 +36,50 @@ def set_cell_text(cell, text):
     runs[0].text = text
     for r in runs[1:]:
         r._element.getparent().remove(r._element)
+
+
+def set_cell_width(tc, dxa):
+    tcPr = tc.find(qn("w:tcPr"))
+    if tcPr is None:
+        tcPr = tc.makeelement(qn("w:tcPr"), {})
+        tc.insert(0, tcPr)
+    tcW = tcPr.find(qn("w:tcW"))
+    if tcW is None:
+        tcW = tcPr.makeelement(qn("w:tcW"), {})
+        tcPr.append(tcW)
+    tcW.set(qn("w:w"), str(dxa))
+    tcW.set(qn("w:type"), "dxa")
+
+
+def ensure_angle_column(table):
+    """Upgrade a 3-column table to 4 columns in place. No-op if already 4."""
+    if len(table.rows[0].cells) >= 4:
+        return
+    from docx.table import _Cell
+    grid = table._tbl.find(qn("w:tblGrid"))
+    cols = grid.findall(qn("w:gridCol"))
+    grid.append(copy.deepcopy(cols[-1]))
+    for i, row in enumerate(table.rows):
+        tr = row._element
+        last_tc = tr.findall(qn("w:tc"))[-1]
+        new_tc = copy.deepcopy(last_tc)
+        tr.append(new_tc)
+        set_cell_text(_Cell(new_tc, table), ANGLE_HEADER if i == 0 else "")
+    # rebalance column widths
+    cols = grid.findall(qn("w:gridCol"))
+    for col, w in zip(cols, WIDTHS_4):
+        col.set(qn("w:w"), str(w))
+    for row in table.rows:
+        for tc, w in zip(row._element.findall(qn("w:tc")), WIDTHS_4):
+            set_cell_width(tc, w)
+
+
+def fill_row(row, entry, ncols):
+    set_cell_text(row.cells[0], str(entry["tab"]))
+    set_cell_text(row.cells[1], entry["title"])
+    set_cell_text(row.cells[2], entry["vehicle"])
+    if ncols >= 4:
+        set_cell_text(row.cells[3], entry.get("angle", ""))
 
 
 def main():
@@ -47,13 +97,13 @@ def main():
     d = docx.Document(master)
     table = d.tables[0]
 
+    if any(r.get("angle") for r in rows):
+        ensure_angle_column(table)
+    ncols = len(table.rows[0].cells)
+
     # if the template placeholder row is still present, fill it with the first entry
     if table.rows[-1].cells[0].text.strip() == PLACEHOLDER:
-        first = rows.pop(0)
-        r = table.rows[-1]
-        set_cell_text(r.cells[0], str(first["tab"]))
-        set_cell_text(r.cells[1], first["title"])
-        set_cell_text(r.cells[2], first["vehicle"])
+        fill_row(table.rows[-1], rows.pop(0), ncols)
         appended = 1
     else:
         appended = 0
@@ -64,16 +114,13 @@ def main():
         source_tr.addnext(new_tr)
         source_tr = new_tr
         from docx.table import _Row
-        row = _Row(new_tr, table)
-        set_cell_text(row.cells[0], str(entry["tab"]))
-        set_cell_text(row.cells[1], entry["title"])
-        set_cell_text(row.cells[2], entry["vehicle"])
+        fill_row(_Row(new_tr, table), entry, ncols)
         appended += 1
 
     d.save(master)
     verb = "created" if created else "updated"
     print(f"{verb} {master}: appended {appended} row(s), table now has "
-          f"{len(table.rows) - 1} entries")
+          f"{len(table.rows) - 1} entries, {ncols} columns")
 
 
 if __name__ == "__main__":

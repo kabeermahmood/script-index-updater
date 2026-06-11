@@ -127,6 +127,26 @@
   .btn:hover { border-color: var(--amber); color: var(--amber); }
   .note { color: var(--dim); font-size: 11.5px; margin-top: 7px; }
 
+  /* ---------- toggle ---------- */
+  .opt-row {
+    display: flex; gap: 11px; align-items: flex-start; cursor: pointer;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+    user-select: none;
+  }
+  .tswitch {
+    width: 40px; height: 22px; border-radius: 999px; background: #1a2433;
+    border: 1px solid var(--line); position: relative; flex: none;
+    transition: all .15s; margin-top: 1px;
+  }
+  .tswitch .knob {
+    position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: #5b6c80; transition: all .18s;
+  }
+  .tswitch.on { background: rgba(245,158,11,.28); border-color: var(--amber); }
+  .tswitch.on .knob { left: 19px; background: var(--amber); }
+  .opt-title { font-size: 12.5px; font-weight: 600; }
+  .opt-sub { color: var(--dim); font-size: 11.5px; margin-top: 1px; }
+
   /* ---------- start ---------- */
   #start {
     width: 100%; padding: 13px; border: none; border-radius: 10px;
@@ -213,6 +233,13 @@
         <button class="btn" onclick="pickMaster()">Browse</button>
       </div>
       <div class="note">New entries are appended. If the file doesn't exist, it's created. Close it in Word before starting.</div>
+      <div class="opt-row" onclick="toggleAngle()">
+        <div class="tswitch" id="tswitch"><span class="knob"></span></div>
+        <div>
+          <div class="opt-title">Angle / summary column</div>
+          <div class="opt-sub">Also write a 1–2 sentence summary of each new script's angle into the list.</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -237,6 +264,12 @@
 <script>
 let pdfs = [];
 let running = false;
+let includeAngle = false;
+
+function toggleAngle() {
+  includeAngle = !includeAngle;
+  document.getElementById('tswitch').classList.toggle('on', includeAngle);
+}
 
 const $ = id => document.getElementById(id);
 
@@ -301,7 +334,7 @@ async function startOrStop() {
   const master = $('master').value.trim();
   if (!master.toLowerCase().endsWith('.docx')) { log('Master list must be a .docx path.', 'err'); return; }
 
-  const err = await pywebview.api.start(pdfs, master);
+  const err = await pywebview.api.start(pdfs, master, includeAngle);
   if (err) { log(err, 'err'); return; }
 
   running = true;
@@ -387,6 +420,7 @@ function showResult(text) {
 window.addEventListener('pywebviewready', async () => {
   const d = await pywebview.api.defaults();
   $('master').value = d.master;
+  if (d.include_angle) toggleAngle();
   if (d.initial_pdfs && d.initial_pdfs.length) addFiles(d.initial_pdfs);
   if (!d.claude) log("WARNING: 'claude' command not found on PATH — install Claude Code first.", 'err');
 });

@@ -84,10 +84,19 @@ For every entry in the `new` bucket (plus accepted uncertains):
 Clean each title: strip stray `Title:` prefixes, outer quotes, leading digits,
 and any leaked `Context:` fragments. Keep the title otherwise verbatim.
 
+**Optional — angle/summary:** when the user asked for it (the GUI's
+"Angle / summary column" toggle, or a request like "include summaries"),
+also write an `angle` for each new entry: 1–2 sentences (max ~30 words)
+capturing the script's specific hook — the story it tells about the vehicle
+(e.g. "A written-off armoured car becomes Burma's most feared convoy
+escort"), never a generic description of the vehicle.
+
 ### Step 4 — Append to the master
 
 Write the new entries (in tab-number order) to `rows.json` as a list of
-`{"tab": …, "title": …, "vehicle": …}`, then:
+`{"tab": …, "title": …, "vehicle": …}` — plus `"angle": …` when summaries
+were requested (the script then auto-upgrades 3-column masters to 4 columns;
+existing rows keep an empty angle cell) — then:
 
 ```
 python <skill>/scripts/append_master.py "<master.docx>" rows.json

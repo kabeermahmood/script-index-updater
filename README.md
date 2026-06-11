@@ -26,6 +26,7 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 - **Multi-document runs** — queue several PDFs; each is processed in order and deduplicated against entries appended from the previous ones.
 - **Export-quirk handling** — detects and recovers from Google Docs export defects: dropped tab-marker pages (two scripts merged into one segment), tab numbering gaps, malformed titles, and non-script tabs (notes/brainstorms).
 - **Format-preserving appends** — new table rows are cloned from existing ones, so fonts, borders, shading, and column widths stay exactly as designed. A bundled template bootstraps brand-new master files.
+- **Optional angle/summary column** — flip a toggle and each new entry also gets a 1–2 sentence summary of the script's specific angle. Existing 3-column masters are upgraded in place, with earlier rows left blank.
 
 ## How it works
 

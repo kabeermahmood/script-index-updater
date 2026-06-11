@@ -22,22 +22,24 @@ CONFIG = os.path.join(HERE, "config.json")
 ALLOWED_TOOLS = "Read,Write,Edit,Glob,Grep,Bash,Task,TodoWrite,Skill"
 
 
-def default_master():
-    """Last-used master list path (config.json), or a sensible default."""
+def load_config():
     try:
         with open(CONFIG, encoding="utf-8") as f:
-            m = json.load(f).get("master", "")
-            if m:
-                return m
+            return json.load(f)
     except (OSError, ValueError):
-        pass
-    return os.path.join(os.path.expanduser("~"), "Documents", "Script Index.docx")
+        return {}
 
 
-def remember_master(master):
+def default_master():
+    """Last-used master list path (config.json), or a sensible default."""
+    m = load_config().get("master", "")
+    return m or os.path.join(os.path.expanduser("~"), "Documents", "Script Index.docx")
+
+
+def remember_settings(master, include_angle):
     try:
         with open(CONFIG, "w", encoding="utf-8") as f:
-            json.dump({"master": master}, f, indent=1)
+            json.dump({"master": master, "include_angle": include_angle}, f, indent=1)
     except OSError:
         pass
 
@@ -51,6 +53,14 @@ PROMPT_TEMPLATE = (
     "When finished, print a combined summary in markdown: tabs found per PDF, how many "
     "were already in the master, how many were appended (list each new title with its "
     "vehicle), and any anomalies the user should fix in their Google Docs."
+)
+
+ANGLE_CLAUSE = (
+    "\n\nThe user enabled the Angle/Summary column. For EVERY new entry, also write an "
+    '"angle" field in rows.json: a concise 1-2 sentence summary (max ~30 words) of the '
+    "script's specific angle or hook - the particular story it tells about the vehicle, "
+    "not a generic description of the vehicle itself. append_master.py automatically "
+    "adds and fills the 'Angle / Summary' column (existing rows keep an empty cell)."
 )
 
 
@@ -71,6 +81,7 @@ class Api:
     # ---------- exposed to JS ----------
     def defaults(self):
         return {"master": default_master(),
+                "include_angle": bool(load_config().get("include_angle")),
                 "claude": bool(shutil.which("claude")),
                 "initial_pdfs": self._initial_pdfs}
 
@@ -98,10 +109,14 @@ class Api:
         if self._proc and self._proc.poll() is None:
             self._proc.kill()
 
-    def start(self, pdfs, master):
+    def start(self, pdfs, master, include_angle=False):
         """Validate and launch. Returns an error string, or None if started."""
         pdfs = [p.strip().strip('"') for p in pdfs]
         master = master.strip().strip('"')
+        if not pdfs:
+            return "Add at least one PDF first."
+        if not master.lower().endswith(".docx"):
+            return "The master list must be a .docx path."
         for p in pdfs:
             if not os.path.exists(p):
                 return f"File not found: {p}"
@@ -111,9 +126,11 @@ class Api:
         if not claude:
             return "The 'claude' command is not on PATH. Install Claude Code first."
 
-        remember_master(master)
+        remember_settings(master, bool(include_angle))
         pdf_list = "\n".join(f'{i + 1}. "{p}"' for i, p in enumerate(pdfs))
         prompt = PROMPT_TEMPLATE.format(skill=SKILL_MD, master=master, pdf_list=pdf_list)
+        if include_angle:
+            prompt += ANGLE_CLAUSE
         cmd = [claude, "-p", prompt,
                "--output-format", "stream-json", "--verbose",
                "--allowedTools", ALLOWED_TOOLS]
