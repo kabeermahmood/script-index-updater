@@ -23,6 +23,7 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 - **Mission-control GUI** — dark, modern desktop app (Edge WebView2). Drag & drop any number of PDFs, watch a live feed of the indexing run, get a rendered mission report at the end.
 - **YouTube channel mode** — paste a channel URL and every published video's transcript is downloaded in bulk (manual captions preferred, auto-captions fallback) and indexed exactly like script PDFs. Transcripts are cached on disk, so re-running after new uploads only fetches what's new.
 - **One-click comments export** — fetches every comment (and reply) from every video on the channel into `<Channel Name> Comments.json` (one structured file per channel, ideal for feeding to Claude for audience analysis) plus a `Comments.csv` twin for Excel, both saved next to your master list with author, likes, date, reply-threading, and an uploader flag per comment. Three parallel workers with automatic rate-limit backoff keep big channels fast but safe, a toggle switches between all comments and just the top 100 per video, and per-video caching means re-runs only fetch new uploads. No API key needed.
+- **Single-video transcripts** — paste any video link (or browse the channel's videos in a searchable picker and click one) to pull that one transcript as clean, readable paragraphs instead of ragged caption lines. Preview it in the app, copy it to the clipboard with one button, and keep a `.txt` in a `Transcripts` folder next to your master list. Optional AI polish fixes names the captions mis-heard — real examples from one run: *Shepke → Schepke*, *Grist Dale Hall → Grizedale Hall*, *French Comte → Franche-Comté*. Videos already downloaded by a channel run are reused from cache, so they cost nothing.
 - **Live operation progress** — a real progress bar tracks the whole run: per-video counts while transcripts download (`212/486`), then phase-by-phase updates (extract → compare → identify → append) as Claude works, plus a "happening right now" line showing the current action.
 - **Pause / resume / end controls** — pause genuinely freezes the run (the whole worker process tree is suspended — no CPU, network, or tokens burned), resume picks up exactly where it stopped, and end aborts cleanly even from a paused state.
 - **AI-powered hero identification** — scripts without an explicit `Vehicle/Ship/Weapon in Context:` label are read by [Claude Code](https://claude.com/claude-code) running headlessly, which names the script's hero in the channel's own domain: tanks for a vehicles channel, warships for a naval channel, rifles for a weapons channel. No API key required; it uses your existing Claude Code installation.
@@ -38,6 +39,9 @@ Managing a YouTube channel with a Google Doc holding **90+ script tabs** means o
 flowchart LR
     A["PDF export(s)"] --> B[GUI<br/>pywebview app]
     A2["YouTube channel URL"] --> B
+    A3["Single video URL"] --> B
+    B -->|"transcript only"| D3[fetch_video.py<br/>video → clean paragraphs]
+    D3 --> T[("Transcript .txt<br/>+ clipboard")]
     B -->|"pre-fetch (per-video progress)"| D2[fetch_channel.py<br/>channel → transcript tabs]
     B -->|headless run| C[Claude Code CLI]
     C --> D[extract_tabs.py<br/>PDF → structured tabs]
@@ -58,6 +62,7 @@ The deterministic steps (transcript fetching, parsing, deduplication, document s
 ├── scripts/
 │   ├── extract_tabs.py       # PDF → JSON (tab, title, vehicle label, snippet) + anomaly report
 │   ├── fetch_channel.py      # YouTube channel → bulk transcripts + the same JSON schema
+│   ├── fetch_video.py        # One video → a clean, paragraphed transcript .txt
 │   ├── fetch_comments.py     # YouTube channel → every video's comments → one CSV
 │   ├── compare.py            # Buckets tabs: matched / uncertain / new vs the master list
 │   └── append_master.py      # Appends rows to the .docx, cloning formatting from existing rows
@@ -96,7 +101,8 @@ Optionally, send `launcher.bat` to your desktop as a shortcut.
 3. Confirm the master list path — created automatically if it doesn't exist. Channel runs manage their own per-channel index automatically: `<Channel Name> Script Index.docx` in the same folder (the path field updates to it once the channel is identified), so every channel keeps a separate, recognizable master list.
 4. **START INDEXING** and watch the operation progress bar and mission feed. A run over a large export takes a few minutes; most of that is Claude reading scripts to identify subjects. A first channel run also downloads every transcript (~2 s per video); later runs reuse the cache and only fetch new uploads.
 5. While a run is active the start button becomes **⏸ PAUSE** / **■ END** — pause freezes the run completely (resume continues where it left off; avoid very long pauses, the in-flight AI request can time out), end aborts it.
-6. Review the mission report, then *Open master list*. Every report is also saved as a markdown file named after the channel (or the master list, for PDF-only runs) in a `Mission Reports` folder next to your master list — e.g. `Mission Reports\British Naval History - 2026-06-11 15.30.md`.
+6. To grab **one** video's transcript instead, paste its link into the *Single video transcript* field — or press **Browse channel videos** to list the channel above and click the one you want — then **Fetch transcript**. The cleaned text appears in a preview panel with a **Copy transcript** button, and is saved as `Transcripts\<Video Title>.txt` next to your master list. Leave *AI polish* off for an instant copy; switch it on (adds 3–5 minutes) to have Claude correct names the captions mis-heard.
+7. Review the mission report, then *Open master list*. Every report is also saved as a markdown file named after the channel (or the master list, for PDF-only runs) in a `Mission Reports` folder next to your master list — e.g. `Mission Reports\British Naval History - 2026-06-11 15.30.md`.
 
 ### As a Claude Code skill
 

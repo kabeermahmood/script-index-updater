@@ -79,6 +79,24 @@ Step 2 exactly as for a PDF. Channel-mode notes:
 - Videos with no captions at all are listed in `anomalies` — report them at
   the end; there is nothing to fix.
 
+### Step 1 (single video) — Fetch one video's transcript
+
+When the user wants the transcript of ONE video rather than an index (e.g.
+"get me the transcript of this video", "copy the script of that upload"), no
+master list is involved:
+
+```
+python <skill>/scripts/fetch_video.py "<video_url>" <out_dir>
+```
+
+Accepts a watch URL, a youtu.be link, a `/shorts/` URL or a bare video ID, and
+writes `<out_dir>/<Video Title>.txt` reflowed into paragraphs. It prints
+`TITLE:`, `SAVED:` and a `SUMMARY:` line carrying `punctuated=yes|no` — use
+that to decide whether the text needs punctuation restored or only a check for
+mis-heard proper nouns. Transcripts already cached by a channel run are reused,
+so a video is never downloaded twice. Report the saved path and stop; do not
+touch the master list.
+
 ### Step 2 — Compare against the master
 
 ```
