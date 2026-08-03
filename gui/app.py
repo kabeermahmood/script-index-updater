@@ -412,25 +412,40 @@ class Api:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=self._cancelled)
 
-    def start_transcript(self, video_url, master="", polish=True):
-        """Validate and launch a single-video transcript run. Error or None."""
-        video_url = (video_url or "").strip().strip('"')
+    def start_transcript(self, videos, master="", polish=True, label=""):
+        """Validate and launch a transcript run over one or more videos.
+        `videos` is a URL string or a list of {id,title,url,views} records."""
         master = (master or "").strip().strip('"')
-        if not video_url:
-            return "Paste a YouTube video link first."
-        if re.search(r"youtube\.com/(@|c/|user/|channel/)", video_url, re.I) \
-                and not re.search(r"[?&]v=", video_url, re.I):
-            return ("That's a channel link, not a video - use "
-                    "“Browse channel videos” to pick one.")
-        if not (re.search(r"(youtube\.com|youtu\.be)/\S", video_url, re.I)
-                or re.match(r"^[A-Za-z0-9_-]{11}$", video_url)):
-            return f"That doesn't look like a YouTube video link: {video_url}"
+        if isinstance(videos, str):
+            videos = [videos] if videos.strip() else []
+        if not isinstance(videos, list) or not videos:
+            return "Paste a video link, or tick some videos in the picker."
+        refs = []
+        for v in videos:
+            if isinstance(v, str):
+                v = {"url": v}
+            url = str(v.get("url") or v.get("id") or "").strip().strip('"')
+            if not url:
+                continue
+            if re.search(r"youtube\.com/(@|c/|user/|channel/)", url, re.I) \
+                    and not re.search(r"[?&]v=", url, re.I):
+                return ("That's a channel link, not a video - use "
+                        "“Browse channel videos” to pick one.")
+            if not (re.search(r"(youtube\.com|youtu\.be)/\S", url, re.I)
+                    or re.match(r"^[A-Za-z0-9_-]{11}$", url)):
+                return f"That doesn't look like a YouTube video link: {url}"
+            refs.append({"url": url, "id": str(v.get("id") or ""),
+                         "title": str(v.get("title") or "").strip(),
+                         "views": v.get("views")})
+        if not refs:
+            return "Paste a video link, or tick some videos in the picker."
         if importlib.util.find_spec("yt_dlp") is None:
             return "Transcript fetching needs yt-dlp. Run: pip install yt-dlp"
         base = (os.path.dirname(master) if master
                 else os.path.join(os.path.expanduser("~"), "Documents"))
         out_dir = os.path.join(base or ".", "Transcripts")
-        remember_settings(video=video_url, polish=bool(polish))
+        remember_settings(video=refs[0]["url"] if len(refs) == 1 else "",
+                          polish=bool(polish))
         # polish needs Claude Code; without it the run still produces a transcript.
         # The warning is raised inside the job, because the UI clears the feed
         # right after this call returns and would wipe anything emitted here.
@@ -438,24 +453,35 @@ class Api:
         self._cancelled = False
         self._paused = False
         threading.Thread(target=self._run_transcript_job,
-                         args=(video_url, out_dir, effective,
-                               bool(polish) and not effective), daemon=True).start()
+                         args=(refs, out_dir, effective,
+                               bool(polish) and not effective,
+                               str(label or "").strip()), daemon=True).start()
         return None
 
-    def _run_transcript_job(self, video_url, out_dir, polish, no_claude=False):
-        """Stage 1: fetch + reflow the transcript. Stage 2: optional AI polish."""
+    def _run_transcript_job(self, refs, out_dir, polish, no_claude=False, label=""):
+        """Stage 1: fetch + reflow every transcript into one file.
+        Stage 2: optional AI polish over the result."""
         try:
             if no_claude:
                 self._emit(kind="err",
                            text="'claude' is not on PATH - skipping the AI polish.")
             script = os.path.normpath(os.path.join(HERE, "..", "scripts",
                                                    "fetch_video.py"))
+            batch = os.path.join(tempfile.gettempdir(), "index-scripts",
+                                 "_batch.json")
+            os.makedirs(os.path.dirname(batch), exist_ok=True)
+            with open(batch, "w", encoding="utf-8") as f:
+                json.dump(refs, f, ensure_ascii=False)
+            cmd = [sys.executable, "-u", script, out_dir, "--batch", batch]
+            if label:
+                cmd += ["--label", label]
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-            self._emit(kind="progress", pct=4, label="Fetching transcript")
+            self._emit(kind="progress", pct=4, label=(
+                "Fetching transcript" if len(refs) == 1
+                else f"Fetching {len(refs)} transcripts"))
             self._proc = subprocess.Popen(
-                [sys.executable, "-u", script, video_url, out_dir],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                 errors="replace", creationflags=flags, env=env)
             title, path, summary = "", "", ""
@@ -463,7 +489,16 @@ class Api:
                 line = line.rstrip()
                 if not line:
                     continue
-                if line.startswith("TITLE: "):
+                m = re.match(r"\[(\d+)/(\d+)\]", line)
+                if m:
+                    n, total = int(m.group(1)), int(m.group(2))
+                    self._emit(kind="progress",
+                               pct=round(4 + 51 * n / max(total, 1), 1),
+                               label=f"Fetching transcripts ({n}/{total})")
+                    self._emit(kind="tool", text=line)
+                elif line.startswith("ANOMALY: "):
+                    self._emit(kind="err", text=line[len("ANOMALY: "):].strip())
+                elif line.startswith("TITLE: "):
                     title = line[len("TITLE: "):].strip()
                     self._emit(kind="meta", text=line)
                 elif line.startswith("SAVED: "):
@@ -516,7 +551,9 @@ class Api:
             self._emit(kind="transcript", title=title, text=text, path=path,
                        words=len(text.split()), raw_words=raw_words,
                        polished=polished, captions=stats.get("kind", ""),
-                       cached=stats.get("cached") == "yes")
+                       cached=stats.get("cached") == "yes",
+                       videos=int(stats.get("videos", 1) or 1),
+                       failed=int(stats.get("failed", 0) or 0))
             self._emit(kind="done", ok=True, cancelled=False)
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")
