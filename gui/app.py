@@ -87,6 +87,50 @@ PROGRESS_CLAUSE = (
 
 PHASE_RE = re.compile(r"^PHASE\s+(\d+)\s*/\s*(\d+)\s*[-—:]\s*(.+?)\s*$", re.M)
 
+POLISH_PROMPT = (
+    'Read the transcript file "{src}" and write a cleaned-up version of it to '
+    '"{dst}".\n\n'
+    "It is the caption transcript of one YouTube video. Clean it up in these ways "
+    "and no others:\n"
+    "- Restore sentence punctuation and capitalisation wherever they are missing.\n"
+    "- Break the text into readable paragraphs at natural shifts in the narration.\n"
+    "- Correct words the caption engine clearly mis-heard, above all proper nouns: "
+    "ship, vehicle, aircraft and weapon designations, place names and people's "
+    'names (e.g. "bismark" -> "Bismarck", "you boat" -> "U-boat").\n'
+    "- Drop speech-recognition artefacts such as accidentally duplicated words.\n\n"
+    "ABSOLUTE RULES - breaking any one of these ruins the result:\n"
+    "- NEVER summarise, condense, paraphrase or reword. Every sentence of the "
+    "source must appear in the output, saying the same thing in the same words.\n"
+    "- NEVER add a preamble, heading, commentary or closing note. The file must "
+    "hold the transcript text and nothing else.\n"
+    "- The output must be as long as the input: the source has {words} words, so "
+    "the output must have at least {floor}.\n"
+    "- If the transcript is long, work through it in sequential chunks, appending "
+    "each cleaned chunk to the output file, until the WHOLE source is covered. "
+    "Never stop early and never skip a passage.\n\n"
+    "Print exactly POLISH COMPLETE once the entire transcript has been written."
+)
+
+CORRECT_PROMPT = (
+    'Read the transcript file "{src}". It is the caption transcript of one '
+    "YouTube video, and its punctuation is already fine, so do NOT rewrite it.\n\n"
+    "Your only job is to spot words the caption engine mis-heard - above all "
+    "proper nouns: ship, vehicle, aircraft and weapon designations, place names, "
+    'people\'s names and military terms (e.g. "bismark" -> "Bismarck", '
+    '"you boat" -> "U-boat", "Ark Royale" -> "Ark Royal").\n\n'
+    'Write a JSON array to "{dst}", at most 60 entries, of the form\n'
+    '[{{"wrong": "<text exactly as it appears>", "right": "<correction>"}}]\n\n'
+    "Rules:\n"
+    '- "wrong" must appear VERBATIM in the file and be at most 5 words long.\n'
+    "- Include only genuine mis-transcriptions you are confident about. If there "
+    "are none, write [].\n"
+    "- Never include changes of wording, grammar, style or punctuation.\n\n"
+    "Print DONE once the file is written."
+)
+
+POLISH_FLOOR = 0.85  # polished text shorter than this fraction of raw is rejected
+MAX_FIX_WORDS = 5    # a "correction" longer than this is a rewrite, not a fix
+
 ANGLE_CLAUSE = (
     "\n\nThe user enabled the Story Context column. For EVERY new entry, also write an "
     '"angle" field in rows.json: 2-3 sentences (~40-60 words) of story context - what '
@@ -120,7 +164,9 @@ class Api:
         return {"master": default_master(),
                 "include_angle": bool(cfg.get("include_angle")),
                 "comments_top": bool(cfg.get("comments_top")),
+                "polish": cfg.get("polish", True),
                 "channel": cfg.get("channel", ""),
+                "video": cfg.get("video", ""),
                 "claude": bool(shutil.which("claude")),
                 "initial_pdfs": self._initial_pdfs}
 
@@ -142,6 +188,79 @@ class Api:
         p = (p or "").strip().strip('"')
         if os.path.exists(p):
             os.startfile(p)
+
+    def copy_text(self, text):
+        """Put text on the clipboard. Done here rather than in JS because
+        navigator.clipboard is unavailable on WebView2's file:// origin."""
+        if os.name != "nt" or not text:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+            CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
+            u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+            k32.GlobalAlloc.restype = wintypes.HGLOBAL
+            k32.GlobalLock.restype = ctypes.c_void_p
+            k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+            u32.SetClipboardData.restype = wintypes.HANDLE
+            u32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+            buf = ctypes.create_unicode_buffer(text)
+            size = ctypes.sizeof(buf)
+            handle = k32.GlobalAlloc(GMEM_MOVEABLE, size)
+            if not handle:
+                return False
+            ctypes.memmove(k32.GlobalLock(handle), buf, size)
+            k32.GlobalUnlock(handle)
+            if not u32.OpenClipboard(None):
+                k32.GlobalFree(handle)
+                return False
+            try:
+                u32.EmptyClipboard()
+                if not u32.SetClipboardData(CF_UNICODETEXT, handle):
+                    k32.GlobalFree(handle)
+                    return False
+            finally:
+                u32.CloseClipboard()
+            return True  # on success the clipboard owns the memory - don't free
+        except Exception:
+            return False
+
+    def list_channel_videos(self, channel):
+        """Enumerate a channel's videos for the picker (no transcripts fetched).
+        Returns the videos.json payload, or {"error": …}."""
+        channel = (channel or "").strip().strip('"')
+        if not channel:
+            return {"error": "Enter a YouTube channel URL first."}
+        if not re.search(r"(youtube\.com|youtu\.be)/\S", channel, re.I):
+            return {"error": f"That doesn't look like a YouTube channel URL: {channel}"}
+        if importlib.util.find_spec("yt_dlp") is None:
+            return {"error": "Listing videos needs yt-dlp. Run: pip install yt-dlp"}
+        out_dir = self._channel_dir(channel)
+        script = os.path.normpath(os.path.join(HERE, "..", "scripts", "fetch_channel.py"))
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            # deliberately not self._proc: this must not collide with pause/end
+            proc = subprocess.run(
+                [sys.executable, "-u", script, channel, out_dir, "--list-only"],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", creationflags=flags,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=600)
+        except subprocess.TimeoutExpired:
+            return {"error": "Listing the channel's videos timed out."}
+        except Exception as e:
+            return {"error": f"Could not list the channel's videos: {e}"}
+        path = os.path.join(out_dir, "videos.json")
+        if proc.returncode != 0 or not os.path.exists(path):
+            tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            return {"error": tail[-1] if tail else
+                    (proc.stderr or "Could not list the channel's videos.").strip()}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            return {"error": f"Could not read the video list: {e}"}
+        remember_settings(channel=channel)
+        return data
 
     def _tree(self):
         """psutil handles for the worker process and all of its children."""
@@ -292,6 +411,236 @@ class Api:
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=self._cancelled)
+
+    def start_transcript(self, video_url, master="", polish=True):
+        """Validate and launch a single-video transcript run. Error or None."""
+        video_url = (video_url or "").strip().strip('"')
+        master = (master or "").strip().strip('"')
+        if not video_url:
+            return "Paste a YouTube video link first."
+        if re.search(r"youtube\.com/(@|c/|user/|channel/)", video_url, re.I) \
+                and not re.search(r"[?&]v=", video_url, re.I):
+            return ("That's a channel link, not a video - use "
+                    "“Browse channel videos” to pick one.")
+        if not (re.search(r"(youtube\.com|youtu\.be)/\S", video_url, re.I)
+                or re.match(r"^[A-Za-z0-9_-]{11}$", video_url)):
+            return f"That doesn't look like a YouTube video link: {video_url}"
+        if importlib.util.find_spec("yt_dlp") is None:
+            return "Transcript fetching needs yt-dlp. Run: pip install yt-dlp"
+        base = (os.path.dirname(master) if master
+                else os.path.join(os.path.expanduser("~"), "Documents"))
+        out_dir = os.path.join(base or ".", "Transcripts")
+        remember_settings(video=video_url, polish=bool(polish))
+        # polish needs Claude Code; without it the run still produces a transcript.
+        # The warning is raised inside the job, because the UI clears the feed
+        # right after this call returns and would wipe anything emitted here.
+        effective = bool(polish) and bool(shutil.which("claude"))
+        self._cancelled = False
+        self._paused = False
+        threading.Thread(target=self._run_transcript_job,
+                         args=(video_url, out_dir, effective,
+                               bool(polish) and not effective), daemon=True).start()
+        return None
+
+    def _run_transcript_job(self, video_url, out_dir, polish, no_claude=False):
+        """Stage 1: fetch + reflow the transcript. Stage 2: optional AI polish."""
+        try:
+            if no_claude:
+                self._emit(kind="err",
+                           text="'claude' is not on PATH - skipping the AI polish.")
+            script = os.path.normpath(os.path.join(HERE, "..", "scripts",
+                                                   "fetch_video.py"))
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            self._emit(kind="progress", pct=4, label="Fetching transcript")
+            self._proc = subprocess.Popen(
+                [sys.executable, "-u", script, video_url, out_dir],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=flags, env=env)
+            title, path, summary = "", "", ""
+            for line in self._proc.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                if line.startswith("TITLE: "):
+                    title = line[len("TITLE: "):].strip()
+                    self._emit(kind="meta", text=line)
+                elif line.startswith("SAVED: "):
+                    path = line[len("SAVED: "):].strip()
+                elif line.startswith("SUMMARY: "):
+                    summary = line[len("SUMMARY: "):].strip()
+                elif line.startswith("ERROR: "):
+                    self._emit(kind="err", text=line)
+                else:
+                    self._emit(kind="meta", text=line)
+            code = self._proc.wait()
+            if self._cancelled or code != 0 or not path or not os.path.exists(path):
+                if not self._cancelled and code != 0:
+                    self._emit(kind="err",
+                               text="Transcript fetch failed - see the feed above.")
+                self._emit(kind="done", ok=False, cancelled=self._cancelled)
+                return
+
+            stats = dict(kv.split("=", 1) for kv in summary.split() if "=" in kv)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            raw_words = len(text.split())
+            self._emit(kind="progress", pct=55,
+                       label="Transcript ready" if not polish else "Cleaning up text")
+            polished = False
+            if polish and not self._cancelled:
+                if stats.get("punctuated") == "yes":
+                    self._emit(kind="meta", text=(
+                        "These captions already carry punctuation - checking for "
+                        "mis-heard names instead of rewriting the text."))
+                    new_text, why, applied = self._correct_transcript(path, text)
+                    for fix in applied:
+                        self._emit(kind="tool", text=f"fixed: {fix}")
+                    if new_text is not None and not applied:
+                        self._emit(kind="meta", text="No mis-heard names found.")
+                else:
+                    new_text, why = self._polish_transcript(path, raw_words)
+                if new_text:
+                    text, polished = new_text, True
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                elif why:
+                    self._emit(kind="err", text=why)
+            if self._cancelled:
+                self._emit(kind="done", ok=False, cancelled=True)
+                return
+
+            self._emit(kind="progress", pct=100, label="Transcript ready")
+            self._emit(kind="output", path=path, label="Open transcript")
+            self._emit(kind="transcript", title=title, text=text, path=path,
+                       words=len(text.split()), raw_words=raw_words,
+                       polished=polished, captions=stats.get("kind", ""),
+                       cached=stats.get("cached") == "yes")
+            self._emit(kind="done", ok=True, cancelled=False)
+        except Exception as e:
+            self._emit(kind="err", text=f"ERROR: {e}")
+            self._emit(kind="done", ok=False, cancelled=self._cancelled)
+
+    def _claude_pass(self, prompt, dst, label, start_pct=60):
+        """Run one headless Claude pass that must leave its output in `dst`.
+        Returns (ok, reason)."""
+        claude = shutil.which("claude")
+        if not claude:
+            return False, "Claude Code is not on PATH - keeping the raw transcript."
+        try:
+            if os.path.exists(dst):  # never judge a run by a previous one's output
+                os.remove(dst)
+        except OSError:
+            pass
+        self._emit(kind="progress", pct=start_pct, label=label)
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            self._proc = subprocess.Popen(
+                [claude, "-p", "--output-format", "stream-json", "--verbose",
+                 "--allowedTools", "Read,Write,Edit"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=flags, cwd=os.path.expanduser("~"))
+            try:
+                self._proc.stdin.write(prompt)
+            finally:
+                self._proc.stdin.close()
+            steps = 0
+            for line in self._proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except ValueError:
+                    continue
+                if evt.get("type") != "assistant":
+                    continue
+                for block in evt.get("message", {}).get("content", []):
+                    if block.get("type") == "tool_use":
+                        steps += 1
+                        self._emit(kind="tool",
+                                   text=f"{block.get('name', 'tool')}: {label.lower()}")
+                        self._emit(kind="progress",
+                                   pct=min(92, start_pct + steps * 4), label=label)
+            code = self._proc.wait()
+        except Exception as e:
+            return False, f"The AI pass failed ({e}) - keeping the raw transcript."
+        if self._cancelled:
+            return False, None
+        if code != 0 or not os.path.exists(dst):
+            return False, "The AI pass failed - keeping the raw transcript."
+        return True, None
+
+    def _correct_transcript(self, path, text):
+        """Fast path for captions that already carry punctuation: Claude returns
+        a short list of mis-heard words and they are applied here. Rewriting the
+        whole transcript would spend minutes regenerating text that is already
+        correct, and applying edits locally means it can never be truncated.
+        Returns (text, reason, applied_fixes)."""
+        dst = os.path.splitext(path)[0] + ".fixes.json"
+        ok, why = self._claude_pass(CORRECT_PROMPT.format(src=path, dst=dst),
+                                    dst, "Checking names")
+        if not ok:
+            return None, why, []
+        try:
+            with open(dst, encoding="utf-8") as f:
+                pairs = json.load(f)
+        except (OSError, ValueError) as e:
+            return None, f"Could not read the corrections ({e}) - keeping the raw text.", []
+        finally:
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+        if not isinstance(pairs, list):
+            return None, "The corrections were not a list - keeping the raw text.", []
+        out, applied = text, []
+        for p in pairs[:60]:
+            if not isinstance(p, dict):
+                continue
+            wrong = str(p.get("wrong", "")).strip()
+            right = str(p.get("right", "")).strip()
+            if (not wrong or not right or wrong == right
+                    or len(wrong.split()) > MAX_FIX_WORDS or len(wrong) > 60):
+                continue  # a long "correction" is a rewrite in disguise
+            # lambda replacement: backslashes and \1 in `right` stay literal
+            new, n = re.subn(rf"(?<!\w){re.escape(wrong)}(?!\w)", lambda m: right, out)
+            if n:
+                out = new
+                applied.append(f"{wrong} → {right} ({n}×)")
+        ratio = len(out.split()) / max(len(text.split()), 1)
+        if not 0.9 <= ratio <= 1.1:
+            return None, "The corrections changed the length too much - keeping the raw text.", []
+        return out, None, applied
+
+    def _polish_transcript(self, path, raw_words):
+        """Full rewrite, for captions that arrive with no punctuation at all.
+        Anything that loses a meaningful chunk of the text is rejected - a
+        truncated transcript is worse than a rough one."""
+        dst = os.path.splitext(path)[0] + ".polished.txt"
+        floor = max(1, int(raw_words * POLISH_FLOOR))
+        ok, why = self._claude_pass(
+            POLISH_PROMPT.format(src=path, dst=dst, words=raw_words, floor=floor),
+            dst, "Polishing transcript")
+        if not ok:
+            return None, why
+        try:
+            with open(dst, encoding="utf-8") as f:
+                out = f.read().strip()
+        except OSError as e:
+            return None, f"Could not read the polished text ({e}) - keeping the raw one."
+        finally:
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+        got = len(out.split())
+        if got < floor:
+            return None, (f"Polish returned only {got} of {raw_words} words, so it was "
+                          "discarded - keeping the raw transcript.")
+        return out, None
 
     # ---------- worker ----------
     @staticmethod
