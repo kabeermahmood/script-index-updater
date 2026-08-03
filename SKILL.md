@@ -90,7 +90,17 @@ python <skill>/scripts/fetch_video.py "<video_url>" <out_dir>
 ```
 
 Accepts a watch URL, a youtu.be link, a `/shorts/` URL or a bare video ID, and
-writes `<out_dir>/<Video Title>.txt` reflowed into paragraphs. It prints
+writes `<out_dir>/<Video Title>.txt` reflowed into paragraphs.
+
+For several videos at once, pass a JSON list of `{id, title, url, views}`
+instead and they are merged into one file, each under its own header:
+
+```
+python <skill>/scripts/fetch_video.py <out_dir> --batch videos.json --label "<Channel>"
+```
+
+A video that cannot be fetched is reported on an `ANOMALY:` line and skipped;
+the rest of the batch still completes. It prints
 `TITLE:`, `SAVED:` and a `SUMMARY:` line carrying `punctuated=yes|no` — use
 that to decide whether the text needs punctuation restored or only a check for
 mis-heard proper nouns. Transcripts already cached by a channel run are reused,
