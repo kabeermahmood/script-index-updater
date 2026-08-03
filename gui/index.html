@@ -243,6 +243,62 @@
   #result-body th { color: var(--dim); background: #16202c; }
   #result-body strong { color: var(--amber); }
   #open-master { margin-top: 10px; }
+
+  /* ---------- video picker ---------- */
+  #picker {
+    display: none; position: fixed; inset: 0; z-index: 50; padding: 40px;
+    background: rgba(5,8,12,.72); align-items: center; justify-content: center;
+  }
+  #picker.show { display: flex; }
+  .pbox {
+    background: linear-gradient(180deg, var(--panel), var(--panel2));
+    border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+    width: 640px; max-width: 100%; max-height: 100%;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .phead { display: flex; align-items: center; gap: 10px; }
+  .phead h2 { flex: 1; margin: 0; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+  .pclose { cursor: pointer; color: var(--dim); font-size: 15px; flex: none;
+            padding: 2px 6px; border-radius: 5px; }
+  .pclose:hover { color: var(--red); background: rgba(248,113,113,.12); }
+  #plist { flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+           gap: 5px; min-height: 140px; }
+  #plist::-webkit-scrollbar { width: 9px; }
+  #plist::-webkit-scrollbar-thumb { background: #243140; border-radius: 5px; }
+  .vrow {
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    background: #16202c; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px;
+  }
+  .vrow:hover { border-color: var(--amber); background: rgba(245,158,11,.07); }
+  .vrow .n { color: var(--dim); font-family: Consolas, monospace; font-size: 11.5px;
+             flex: none; width: 34px; }
+  .vrow .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vrow .c { color: var(--green); flex: none; font-size: 11px; }
+  #pcount { color: var(--dim); font-size: 11.5px; }
+
+  /* ---------- transcript ---------- */
+  #tcard { display: none; flex-direction: column; min-height: 0; max-height: 62%; }
+  #tcard.show { display: flex; }
+  .thead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .thead .ttitle {
+    flex: 1; font-size: 13px; font-weight: 600; color: var(--amber);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .badge {
+    flex: none; font-size: 10.5px; letter-spacing: 1px; padding: 3px 8px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--dim);
+  }
+  .badge.ok { color: var(--green); border-color: rgba(74,222,128,.4); }
+  #ttext {
+    flex: 1; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    font-size: 12.5px; line-height: 1.7; background: #0d1219;
+    border: 1px solid var(--line); border-radius: 8px; padding: 11px;
+  }
+  #ttext::-webkit-scrollbar { width: 9px; }
+  #ttext::-webkit-scrollbar-thumb { background: #243140; border-radius: 5px; }
+  .tbtns { display: flex; gap: 7px; margin-top: 9px; }
 </style>
 </head>
 <body>
@@ -282,6 +338,28 @@
         <div>
           <div class="opt-title">Top 100 comments only</div>
           <div class="opt-sub">Much faster — fetches each video's 100 most relevant comments instead of every thread.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>SINGLE VIDEO TRANSCRIPT</h2>
+      <input type="text" id="video" spellcheck="false"
+             placeholder="https://www.youtube.com/watch?v=…">
+      <div class="mrow" style="margin-top:9px">
+        <button class="btn" style="flex:1" onclick="browseVideos()">☰&nbsp;&nbsp;Browse channel videos</button>
+        <button class="btn" style="flex:1" onclick="fetchTranscript()">⬇&nbsp;&nbsp;Fetch transcript</button>
+      </div>
+      <div class="note">One video's transcript as clean paragraphs — preview it, copy it
+        to the clipboard, and keep a .txt in a "Transcripts" folder next to your master
+        list. "Browse" lists the videos of the channel above so you can pick one.</div>
+      <div class="opt-row" onclick="togglePolish()">
+        <div class="tswitch" id="tswitch-polish"><span class="knob"></span></div>
+        <div>
+          <div class="opt-title">AI polish</div>
+          <div class="opt-sub">Claude fixes names the captions mis-heard (Schepke,
+            Grizedale Hall…) and restores punctuation if it is missing.
+            Adds 3–5 minutes — leave it off for a quick copy.</div>
         </div>
       </div>
     </div>
@@ -332,6 +410,30 @@
       <div id="result-body"></div>
       <button class="btn" id="open-master" onclick="openMaster()">Open master list</button>
     </div>
+    <div class="card" id="tcard">
+      <div class="thead">
+        <span class="ttitle" id="ttitle">Transcript</span>
+        <span class="badge" id="tbadge"></span>
+      </div>
+      <div id="ttext"></div>
+      <div class="tbtns">
+        <button class="btn" style="flex:1" id="tcopy" onclick="copyTranscript()">📋&nbsp;&nbsp;Copy transcript</button>
+        <button class="btn" onclick="openTranscript()">Open .txt</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="picker" onclick="if (event.target === this) closePicker()">
+  <div class="pbox">
+    <div class="phead">
+      <h2 id="ptitle">CHANNEL VIDEOS</h2>
+      <span class="pclose" onclick="closePicker()">✕</span>
+    </div>
+    <input type="text" id="pfilter" spellcheck="false"
+           placeholder="Filter by title…" oninput="renderPicker()">
+    <div id="plist"></div>
+    <div id="pcount"></div>
   </div>
 </div>
 
@@ -349,8 +451,15 @@ function toggleCommentsTop() {
   commentsTop = !commentsTop;
   document.getElementById('tswitch-top').classList.toggle('on', commentsTop);
 }
+let polish = true;
+function togglePolish() {
+  polish = !polish;
+  document.getElementById('tswitch-polish').classList.toggle('on', polish);
+}
 
 const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /* ---------- file handling ---------- */
 function renderFiles() {
@@ -443,10 +552,87 @@ function beginRun(statusText) {
   setRunning(true);
   $('feed').innerHTML = '';
   $('result').classList.remove('show');
+  $('tcard').classList.remove('show');
+  transcript = null;
   setProgress(0, 'Starting up');
   setNow('');
   setStatus('run', statusText);
 }
+
+/* ---------- single-video transcript ---------- */
+let transcript = null;
+let videoList = [];
+
+async function browseVideos() {
+  if (running) return;
+  const channel = $('channel').value.trim();
+  if (!channel) { log('Enter a YouTube channel URL above first.', 'err'); return; }
+  videoList = [];
+  $('ptitle').textContent = 'CHANNEL VIDEOS';
+  $('pfilter').value = '';
+  $('plist').innerHTML = '<div class="ln meta">Listing the channel’s videos…</div>';
+  $('pcount').textContent = '';
+  $('picker').classList.add('show');
+  const res = await pywebview.api.list_channel_videos(channel);
+  if (!$('picker').classList.contains('show')) return;   // closed while loading
+  if (!res || res.error || !(res.videos || []).length) {
+    closePicker();
+    log((res && res.error) || 'That channel returned no videos.', 'err');
+    return;
+  }
+  videoList = res.videos;
+  $('ptitle').textContent = ((res.channel || 'Channel') + ' — videos').toUpperCase();
+  renderPicker();
+  $('pfilter').focus();
+}
+function renderPicker() {
+  const q = $('pfilter').value.trim().toLowerCase();
+  const rows = videoList.filter(v => !q || (v.title || '').toLowerCase().includes(q));
+  $('plist').innerHTML = rows.map(v =>
+    `<div class="vrow" onclick="pickVideo('${esc(v.id)}')">
+       <span class="n">${v.tab}</span>
+       <span class="t" title="${esc(v.title)}">${esc(v.title)}</span>
+       ${v.cached ? '<span class="c">● cached</span>' : ''}
+     </div>`).join('') || '<div class="ln meta">No video matches that filter.</div>';
+  $('pcount').textContent = `${rows.length} of ${videoList.length} video(s)` +
+    (q ? ' shown' : '') + ' · oldest first';
+}
+function pickVideo(id) {
+  const v = videoList.find(x => x.id === id);
+  if (v) $('video').value = v.url || ('https://www.youtube.com/watch?v=' + v.id);
+  closePicker();
+}
+function closePicker() { $('picker').classList.remove('show'); }
+
+async function fetchTranscript() {
+  if (running) return;
+  const url = $('video').value.trim();
+  if (!url) { log('Paste a video link, or pick one with "Browse channel videos".', 'err'); return; }
+  const err = await pywebview.api.start_transcript(url, $('master').value.trim(), polish);
+  if (err) { log(err, 'err'); return; }
+  beginRun('TRANSCRIPT');
+  log(`Transcript queued for ${url}${polish ? ' (with AI polish)' : ''}`, 'meta');
+  log('─'.repeat(60), 'meta');
+}
+function showTranscript(e) {
+  transcript = e;
+  $('ttitle').textContent = e.title || 'Transcript';
+  const badge = $('tbadge');
+  badge.textContent = `${(e.words || 0).toLocaleString()} words · ` +
+    (e.polished ? 'polished' : 'raw');
+  badge.classList.toggle('ok', !!e.polished);
+  $('ttext').textContent = e.text || '';
+  $('ttext').scrollTop = 0;
+  $('tcard').classList.add('show');
+}
+async function copyTranscript() {
+  if (!transcript) return;
+  const ok = await pywebview.api.copy_text(transcript.text);
+  const b = $('tcopy');
+  b.innerHTML = ok ? '✓&nbsp;&nbsp;Copied' : '✕&nbsp;&nbsp;Copy failed';
+  setTimeout(() => { b.innerHTML = '📋&nbsp;&nbsp;Copy transcript'; }, 1600);
+}
+function openTranscript() { if (transcript) pywebview.api.open_path(transcript.path); }
 
 async function fetchComments() {
   if (running) return;
@@ -488,6 +674,7 @@ function onEvent(e) {
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
   else if (e.kind === 'master') $('master').value = e.path;
   else if (e.kind === 'output') { openPath = e.path; $('open-master').textContent = e.label || 'Open file'; }
+  else if (e.kind === 'transcript') showTranscript(e);
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {
     setRunning(false);
@@ -554,8 +741,11 @@ window.addEventListener('pywebviewready', async () => {
   const d = await pywebview.api.defaults();
   $('master').value = d.master;
   if (d.channel) $('channel').value = d.channel;
+  if (d.video) $('video').value = d.video;
   if (d.include_angle) toggleAngle();
   if (d.comments_top) toggleCommentsTop();
+  polish = d.polish !== false;
+  $('tswitch-polish').classList.toggle('on', polish);
   if (d.initial_pdfs && d.initial_pdfs.length) addFiles(d.initial_pdfs);
   if (!d.claude) log("WARNING: 'claude' command not found on PATH — install Claude Code first.", 'err');
 });
