@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 SNIPPET_CHARS = 1200
@@ -120,6 +121,9 @@ def main():
     ap.add_argument("--delay", type=float, default=1.5,
                     help="seconds between network fetches")
     ap.add_argument("--lang", default="en", help="caption language (default en)")
+    ap.add_argument("--list-only", action="store_true",
+                    help="just enumerate the channel's videos into videos.json; "
+                         "download no transcripts")
     args = ap.parse_args()
 
     try:
@@ -141,6 +145,22 @@ def main():
     if not videos:
         sys.exit("ERROR: no videos found - is this a channel URL?")
     log(f"Channel: {channel or '(unknown)'} - {len(videos)} video(s) found")
+
+    if args.list_only:
+        # Enumeration only - what the GUI's single-video picker runs. "cached"
+        # covers both a previous channel run and a previous single fetch.
+        vcache = os.path.join(tempfile.gettempdir(), "index-scripts", "videos")
+        listing = [{"tab": n, "id": v["id"], "title": v["title"], "url": v["url"],
+                    "cached": (os.path.exists(os.path.join(tdir, f"{v['id']}.txt"))
+                               or os.path.exists(os.path.join(vcache, f"{v['id']}.txt")))}
+                   for n, v in enumerate(videos, 1)]
+        videos_json = os.path.join(args.out_dir, "videos.json")
+        with open(videos_json, "w", encoding="utf-8") as f:
+            json.dump({"channel": channel, "url": url, "videos": listing}, f,
+                      indent=1, ensure_ascii=False)
+        log(f"LIST: {videos_json}")
+        log(f"{len(listing)} video(s) listed -> {videos_json}")
+        return
 
     numbered = list(enumerate(videos, 1))  # (tab number, video), oldest first
     if args.max > 0:
