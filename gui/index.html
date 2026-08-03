@@ -253,7 +253,7 @@
   .pbox {
     background: linear-gradient(180deg, var(--panel), var(--panel2));
     border: 1px solid var(--line); border-radius: 12px; padding: 16px;
-    width: 640px; max-width: 100%; max-height: 100%;
+    width: 780px; max-width: 100%; max-height: 100%;
     display: flex; flex-direction: column; gap: 10px;
   }
   .phead { display: flex; align-items: center; gap: 10px; }
@@ -273,10 +273,45 @@
   }
   .vrow:hover { border-color: var(--amber); background: rgba(245,158,11,.07); }
   .vrow .n { color: var(--dim); font-family: Consolas, monospace; font-size: 11.5px;
-             flex: none; width: 34px; }
+             flex: none; width: 30px; }
   .vrow .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .vrow .c { color: var(--green); flex: none; font-size: 11px; }
+  .vrow .v { color: var(--dim); font-family: Consolas, monospace; font-size: 11.5px;
+             flex: none; width: 58px; text-align: right; }
+  .vrow .box {
+    width: 15px; height: 15px; border-radius: 4px; flex: none; position: relative;
+    border: 1px solid #3a4a5e; background: #0d1219;
+  }
+  .vrow.on { border-color: rgba(245,158,11,.55); background: rgba(245,158,11,.09); }
+  .vrow.on .box { background: var(--amber); border-color: var(--amber); }
+  .vrow.on .box::after {
+    content: "✓"; position: absolute; inset: 0; color: #1a1205;
+    font-size: 11px; font-weight: 700; text-align: center; line-height: 14px;
+  }
+  .tagx {
+    flex: none; font-size: 9.5px; letter-spacing: .5px; padding: 2px 6px;
+    border-radius: 999px; border: 1px solid rgba(103,232,249,.4); color: var(--cyan);
+  }
   #pcount { color: var(--dim); font-size: 11.5px; }
+
+  .ptools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .ptools input[type=text], .ptools input[type=number], .ptools select {
+    background: #0d1219; border: 1px solid var(--line); border-radius: 7px;
+    color: var(--txt); padding: 6px 8px; font-size: 12px; outline: none;
+  }
+  .ptools input:focus, .ptools select:focus { border-color: rgba(245,158,11,.55); }
+  .ptools input[type=number] { width: 96px; }
+  .chipbtn {
+    background: #1a2433; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 11px; font-size: 11.5px; cursor: pointer;
+    user-select: none; white-space: nowrap;
+  }
+  .chipbtn:hover { color: var(--amber); border-color: var(--amber); }
+  .pfoot { display: flex; align-items: center; gap: 9px; }
+  .pfoot .go {
+    background: linear-gradient(135deg, var(--amber), var(--amber-deep));
+    color: #1a1205; border: none; font-weight: 700; letter-spacing: .5px;
+  }
 
   /* ---------- transcript ---------- */
   #tcard { display: none; flex-direction: column; min-height: 0; max-height: 62%; }
@@ -343,16 +378,18 @@
     </div>
 
     <div class="card">
-      <h2>SINGLE VIDEO TRANSCRIPT</h2>
-      <input type="text" id="video" spellcheck="false"
+      <h2>VIDEO TRANSCRIPTS</h2>
+      <input type="text" id="video" spellcheck="false" oninput="picked = []"
              placeholder="https://www.youtube.com/watch?v=…">
       <div class="mrow" style="margin-top:9px">
         <button class="btn" style="flex:1" onclick="browseVideos()">☰&nbsp;&nbsp;Browse channel videos</button>
         <button class="btn" style="flex:1" onclick="fetchTranscript()">⬇&nbsp;&nbsp;Fetch transcript</button>
       </div>
-      <div class="note">One video's transcript as clean paragraphs — preview it, copy it
-        to the clipboard, and keep a .txt in a "Transcripts" folder next to your master
-        list. "Browse" lists the videos of the channel above so you can pick one.</div>
+      <div class="note">Transcripts as clean paragraphs — preview them, copy them to the
+        clipboard, and keep a .txt in a "Transcripts" folder next to your master list.
+        "Browse" lists the channel above with view counts so you can tick several at once;
+        it starts with the most-viewed, average, typical and least-viewed video ticked.
+        Several videos come back as one combined file.</div>
       <div class="opt-row" onclick="togglePolish()">
         <div class="tswitch" id="tswitch-polish"><span class="knob"></span></div>
         <div>
@@ -430,10 +467,32 @@
       <h2 id="ptitle">CHANNEL VIDEOS</h2>
       <span class="pclose" onclick="closePicker()">✕</span>
     </div>
-    <input type="text" id="pfilter" spellcheck="false"
-           placeholder="Filter by title…" oninput="renderPicker()">
+    <div class="ptools">
+      <input type="text" id="pfilter" spellcheck="false" style="flex:1;min-width:120px"
+             placeholder="Filter by title…" oninput="renderPicker()">
+      <select id="psort" onchange="renderPicker()">
+        <option value="tab">Upload order</option>
+        <option value="views-desc">Most viewed</option>
+        <option value="views-asc">Least viewed</option>
+      </select>
+      <input type="number" id="pmin" placeholder="min views" oninput="renderPicker()">
+      <input type="number" id="pmax" placeholder="max views" oninput="renderPicker()">
+    </div>
+    <div class="ptools">
+      <span class="chipbtn" onclick="preset('spread')">Max · Mean · Median · Min</span>
+      <span class="chipbtn" onclick="preset('top10')">Top 10</span>
+      <span class="chipbtn" onclick="preset('bottom10')">Bottom 10</span>
+      <span class="chipbtn" onclick="preset('above')">Above average</span>
+      <span class="chipbtn" onclick="preset('below')">Below average</span>
+      <span class="chipbtn" onclick="preset('visible')">Select shown</span>
+      <span class="chipbtn" onclick="preset('none')">Clear</span>
+    </div>
     <div id="plist"></div>
-    <div id="pcount"></div>
+    <div class="pfoot">
+      <span id="pcount"></span>
+      <span style="flex:1"></span>
+      <button class="btn go" onclick="useSelection()">Fetch selected</button>
+    </div>
   </div>
 </div>
 
@@ -559,17 +618,45 @@ function beginRun(statusText) {
   setStatus('run', statusText);
 }
 
-/* ---------- single-video transcript ---------- */
+/* ---------- single & multi video transcripts ---------- */
 let transcript = null;
-let videoList = [];
+let videoList = [];          // every video on the browsed channel
+let picked = [];             // the ticked ones, carried into the fetch
+let selected = new Set();    // ids ticked in the picker
+let vstats = null;           // view-count distribution of videoList
+let channelLabel = '';
+
+function computeStats(list) {
+  const views = list.map(v => v.views || 0).sort((a, b) => a - b);
+  const n = views.length;
+  if (!n) return null;
+  return {
+    min: views[0],
+    max: views[n - 1],
+    mean: views.reduce((a, b) => a + b, 0) / n,
+    median: n % 2 ? views[(n - 1) / 2] : (views[n / 2 - 1] + views[n / 2]) / 2
+  };
+}
+function nearest(list, target) {
+  return list.reduce((best, v) =>
+    Math.abs((v.views || 0) - target) < Math.abs((best.views || 0) - target) ? v : best,
+    list[0]);
+}
+function fmtViews(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(n);
+}
 
 async function browseVideos() {
   if (running) return;
   const channel = $('channel').value.trim();
   if (!channel) { log('Enter a YouTube channel URL above first.', 'err'); return; }
-  videoList = [];
+  videoList = []; selected.clear(); vstats = null;
   $('ptitle').textContent = 'CHANNEL VIDEOS';
-  $('pfilter').value = '';
+  ['pfilter', 'pmin', 'pmax'].forEach(id => { $(id).value = ''; });
+  $('psort').value = 'tab';
   $('plist').innerHTML = '<div class="ln meta">Listing the channel’s videos…</div>';
   $('pcount').textContent = '';
   $('picker').classList.add('show');
@@ -581,37 +668,95 @@ async function browseVideos() {
     return;
   }
   videoList = res.videos;
-  $('ptitle').textContent = ((res.channel || 'Channel') + ' — videos').toUpperCase();
-  renderPicker();
+  channelLabel = res.channel || '';
+  vstats = computeStats(videoList);
+  $('ptitle').textContent = ((channelLabel || 'Channel') + ' — videos').toUpperCase();
+  preset('spread');            // default: max, mean, median and min views
   $('pfilter').focus();
 }
-function renderPicker() {
+
+function visibleRows() {
   const q = $('pfilter').value.trim().toLowerCase();
-  const rows = videoList.filter(v => !q || (v.title || '').toLowerCase().includes(q));
-  $('plist').innerHTML = rows.map(v =>
-    `<div class="vrow" onclick="pickVideo('${esc(v.id)}')">
-       <span class="n">${v.tab}</span>
-       <span class="t" title="${esc(v.title)}">${esc(v.title)}</span>
-       ${v.cached ? '<span class="c">● cached</span>' : ''}
-     </div>`).join('') || '<div class="ln meta">No video matches that filter.</div>';
-  $('pcount').textContent = `${rows.length} of ${videoList.length} video(s)` +
-    (q ? ' shown' : '') + ' · oldest first';
+  const mn = parseInt($('pmin').value, 10), mx = parseInt($('pmax').value, 10);
+  const rows = videoList.filter(v =>
+    (!q || (v.title || '').toLowerCase().includes(q)) &&
+    (isNaN(mn) || (v.views || 0) >= mn) &&
+    (isNaN(mx) || (v.views || 0) <= mx));
+  const s = $('psort').value;
+  if (s === 'views-desc') rows.sort((a, b) => (b.views || 0) - (a.views || 0));
+  else if (s === 'views-asc') rows.sort((a, b) => (a.views || 0) - (b.views || 0));
+  else rows.sort((a, b) => a.tab - b.tab);
+  return rows;
 }
-function pickVideo(id) {
-  const v = videoList.find(x => x.id === id);
-  if (v) $('video').value = v.url || ('https://www.youtube.com/watch?v=' + v.id);
+function preset(kind) {
+  if (!videoList.length) return;
+  const s = vstats;
+  const byViews = [...videoList].sort((a, b) => (b.views || 0) - (a.views || 0));
+  selected.clear();
+  if (kind === 'spread' && s) {
+    // a deliberate spread of the distribution: best, average, typical, worst
+    [byViews[0], nearest(videoList, s.mean), nearest(videoList, s.median),
+     byViews[byViews.length - 1]].forEach(v => v && selected.add(v.id));
+  } else if (kind === 'top10') byViews.slice(0, 10).forEach(v => selected.add(v.id));
+  else if (kind === 'bottom10') byViews.slice(-10).forEach(v => selected.add(v.id));
+  else if (kind === 'above' && s) videoList.filter(v => (v.views || 0) > s.mean).forEach(v => selected.add(v.id));
+  else if (kind === 'below' && s) videoList.filter(v => (v.views || 0) <= s.mean).forEach(v => selected.add(v.id));
+  else if (kind === 'visible') visibleRows().forEach(v => selected.add(v.id));
+  renderPicker();
+}
+function toggleVideo(id) {
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  renderPicker();
+}
+function renderPicker() {
+  const rows = visibleRows();
+  const s = vstats;
+  const meanId = s ? nearest(videoList, s.mean).id : null;
+  const medianId = s ? nearest(videoList, s.median).id : null;
+  const tagFor = v => {
+    if (!s) return '';
+    const t = v.views === s.max ? 'max' : v.views === s.min ? 'min'
+            : v.id === meanId ? 'mean' : v.id === medianId ? 'median' : '';
+    return t ? `<span class="tagx">${t}</span>` : '';
+  };
+  $('plist').innerHTML = rows.map(v => `
+    <div class="vrow ${selected.has(v.id) ? 'on' : ''}" onclick="toggleVideo('${esc(v.id)}')">
+      <span class="box"></span>
+      <span class="n">${v.tab}</span>
+      <span class="t" title="${esc(v.title)}">${esc(v.title)}</span>
+      ${tagFor(v)}
+      ${v.cached ? '<span class="c">●</span>' : ''}
+      <span class="v">${fmtViews(v.views)}</span>
+    </div>`).join('') || '<div class="ln meta">No video matches those filters.</div>';
+  $('pcount').textContent =
+    `${selected.size} selected · ${rows.length} of ${videoList.length} shown` +
+    (s ? ` · median ${fmtViews(Math.round(s.median))}, mean ${fmtViews(Math.round(s.mean))}` : '');
+}
+function useSelection() {
+  picked = videoList.filter(v => selected.has(v.id));
+  if (!picked.length) { log('Tick at least one video first.', 'err'); return; }
+  $('video').value = picked.length === 1
+    ? (picked[0].url || 'https://www.youtube.com/watch?v=' + picked[0].id)
+    : `${picked.length} videos selected${channelLabel ? ' — ' + channelLabel : ''}`;
   closePicker();
 }
 function closePicker() { $('picker').classList.remove('show'); }
 
 async function fetchTranscript() {
   if (running) return;
-  const url = $('video').value.trim();
-  if (!url) { log('Paste a video link, or pick one with "Browse channel videos".', 'err'); return; }
-  const err = await pywebview.api.start_transcript(url, $('master').value.trim(), polish);
+  const typed = $('video').value.trim();
+  const videos = picked.length ? picked : (typed ? [typed] : []);
+  if (!videos.length) {
+    log('Paste a video link, or tick videos with "Browse channel videos".', 'err');
+    return;
+  }
+  const err = await pywebview.api.start_transcript(
+    videos, $('master').value.trim(), polish, channelLabel);
   if (err) { log(err, 'err'); return; }
   beginRun('TRANSCRIPT');
-  log(`Transcript queued for ${url}${polish ? ' (with AI polish)' : ''}`, 'meta');
+  log(`${videos.length} transcript(s) queued${polish ? ' (with AI polish)' : ''}`, 'meta');
+  if (videos.length > 1 && polish)
+    log('Polish runs once over the combined file, not once per video.', 'meta');
   log('─'.repeat(60), 'meta');
 }
 function showTranscript(e) {
@@ -619,6 +764,7 @@ function showTranscript(e) {
   $('ttitle').textContent = e.title || 'Transcript';
   const badge = $('tbadge');
   badge.textContent = `${(e.words || 0).toLocaleString()} words · ` +
+    (e.videos > 1 ? `${e.videos} videos · ` : '') +
     (e.polished ? 'polished' : 'raw');
   badge.classList.toggle('ok', !!e.polished);
   $('ttext').textContent = e.text || '';
