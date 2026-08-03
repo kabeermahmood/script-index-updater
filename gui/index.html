@@ -660,7 +660,14 @@ async function browseVideos() {
   $('plist').innerHTML = '<div class="ln meta">Listing the channel’s videos…</div>';
   $('pcount').textContent = '';
   $('picker').classList.add('show');
-  const res = await pywebview.api.list_channel_videos(channel);
+  let res;
+  try {
+    res = await pywebview.api.list_channel_videos(channel);
+  } catch (e) {
+    closePicker();
+    log('Could not list the channel: ' + (e && e.message ? e.message : e), 'err');
+    return;
+  }
   if (!$('picker').classList.contains('show')) return;   // closed while loading
   if (!res || res.error || !(res.videos || []).length) {
     closePicker();
@@ -745,13 +752,25 @@ function closePicker() { $('picker').classList.remove('show'); }
 async function fetchTranscript() {
   if (running) return;
   const typed = $('video').value.trim();
-  const videos = picked.length ? picked : (typed ? [typed] : []);
+  const videos = picked.length
+    ? picked.map(v => ({id: v.id, title: v.title,
+                        url: v.url || 'https://www.youtube.com/watch?v=' + v.id,
+                        views: v.views}))
+    : (typed ? [typed] : []);
   if (!videos.length) {
     log('Paste a video link, or tick videos with "Browse channel videos".', 'err');
     return;
   }
-  const err = await pywebview.api.start_transcript(
-    videos, $('master').value.trim(), polish, channelLabel);
+  let err;
+  try {
+    // JSON string, not an array of objects: the bridge is only dependable
+    // with primitives, and a silent rejection here looks like a dead button
+    err = await pywebview.api.start_transcript(
+      JSON.stringify(videos), $('master').value.trim(), polish, channelLabel || '');
+  } catch (e) {
+    log('Could not start the transcript run: ' + (e && e.message ? e.message : e), 'err');
+    return;
+  }
   if (err) { log(err, 'err'); return; }
   beginRun('TRANSCRIPT');
   log(`${videos.length} transcript(s) queued${polish ? ' (with AI polish)' : ''}`, 'meta');

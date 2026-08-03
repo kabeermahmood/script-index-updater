@@ -416,8 +416,17 @@ class Api:
         """Validate and launch a transcript run over one or more videos.
         `videos` is a URL string or a list of {id,title,url,views} records."""
         master = (master or "").strip().strip('"')
+        # The UI sends the list as a JSON string: passing an array of objects
+        # straight through the JS bridge is not reliable, while strings are.
         if isinstance(videos, str):
-            videos = [videos] if videos.strip() else []
+            text = videos.strip()
+            if text.startswith("["):
+                try:
+                    videos = json.loads(text)
+                except ValueError:
+                    return "Could not read the selected videos."
+            else:
+                videos = [text] if text else []
         if not isinstance(videos, list) or not videos:
             return "Paste a video link, or tick some videos in the picker."
         refs = []
