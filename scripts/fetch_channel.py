@@ -81,6 +81,9 @@ def list_videos(ydl, url):
             "id": e["id"],
             "title": (e.get("title") or "").strip(),
             "url": e.get("url") or f"https://www.youtube.com/watch?v={e['id']}",
+            # the flat extract carries these already - no extra request per video
+            "views": e.get("view_count"),
+            "duration": e.get("duration"),
         })
     videos.reverse()  # YouTube lists newest first; we number oldest-first
     name = info.get("channel") or info.get("uploader") or info.get("title") or ""
@@ -151,6 +154,7 @@ def main():
         # covers both a previous channel run and a previous single fetch.
         vcache = os.path.join(tempfile.gettempdir(), "index-scripts", "videos")
         listing = [{"tab": n, "id": v["id"], "title": v["title"], "url": v["url"],
+                    "views": v.get("views"), "duration": v.get("duration"),
                     "cached": (os.path.exists(os.path.join(tdir, f"{v['id']}.txt"))
                                or os.path.exists(os.path.join(vcache, f"{v['id']}.txt")))}
                    for n, v in enumerate(videos, 1)]
