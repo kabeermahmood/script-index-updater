@@ -845,6 +845,13 @@ function onEvent(e) {
     setRunning(false);
     setNow('');
     if (e.ok) { setStatus('done', 'COMPLETE'); setProgress(100, 'Mission complete'); }
+    else if (e.hint === 'auth') {
+      $('pphase').textContent = 'Sign-in needed';
+      setStatus('fail', 'SIGN-IN');
+      $('result-banner').textContent = '◈ SIGN-IN REQUIRED';
+      $('result-banner').classList.add('fail');
+      log('Claude Code sign-in has expired — run `claude`, then /login, and start again.', 'err');
+    }
     else {
       $('pphase').textContent = e.cancelled ? 'Aborted' : 'Failed';
       setStatus('fail', e.cancelled ? 'ABORTED' : 'FAILED');

@@ -87,6 +87,24 @@ PROGRESS_CLAUSE = (
 
 PHASE_RE = re.compile(r"^PHASE\s+(\d+)\s*/\s*(\d+)\s*[-—:]\s*(.+?)\s*$", re.M)
 
+# The headless CLI reports an expired login as an ordinary "result" whose text
+# is one of these. Recognise it so the UI can explain the one-time fix instead
+# of showing the raw string and pointing the user at their Word document.
+AUTH_FAIL_RE = re.compile(
+    r"OAuth session expired|Failed to authenticate|not authenticated|"
+    r"invalid.{0,4}api key|please run.{0,12}login|/login", re.I)
+
+AUTH_HELP_MD = (
+    "## Claude sign-in expired\n\n"
+    "The run reached the AI step, but Claude Code is no longer signed in, so "
+    "nothing could be indexed. This isn't a problem with your documents.\n\n"
+    "**To fix it, once:** open a terminal (or Command Prompt) and run "
+    "`claude`, press Enter to trust the folder, type `/login`, and finish "
+    "signing in through the browser. Then start the run again.\n\n"
+    "Any transcripts already downloaded are cached, so the retry skips straight "
+    "to indexing."
+)
+
 POLISH_PROMPT = (
     'Read the transcript file "{src}" and write a cleaned-up version of it to '
     '"{dst}".\n\n'
@@ -150,6 +168,7 @@ class Api:
         self._pbase, self._pspan = 0, 100  # Claude's slice of the progress bar
         self._master = ""
         self._report_name = ""
+        self._auth_failed = False
 
     # ---------- helpers ----------
     def _emit(self, **payload):
@@ -592,11 +611,13 @@ class Api:
                 self._proc.stdin.write(prompt)
             finally:
                 self._proc.stdin.close()
-            steps = 0
+            steps, auth = 0, False
             for line in self._proc.stdout:
                 line = line.strip()
                 if not line:
                     continue
+                if AUTH_FAIL_RE.search(line):
+                    auth = True
                 try:
                     evt = json.loads(line)
                 except ValueError:
@@ -616,6 +637,10 @@ class Api:
         if self._cancelled:
             return False, None
         if code != 0 or not os.path.exists(dst):
+            if auth:
+                return False, ("Claude Code sign-in has expired, so the transcript "
+                               "was kept unpolished. Run `claude` and sign in with "
+                               "/login, then fetch again.")
             return False, "The AI pass failed - keeping the raw transcript."
         return True, None
 
@@ -788,6 +813,7 @@ class Api:
 
     def _run(self, cmd, prompt=None):
         try:
+            self._auth_failed = False
             flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             self._proc = subprocess.Popen(
                 cmd,
@@ -806,7 +832,8 @@ class Api:
                 got_result = self._handle_line(line) or got_result
             code = self._proc.wait()
             ok = code == 0 and got_result and not self._cancelled
-            self._emit(kind="done", ok=ok, cancelled=self._cancelled)
+            self._emit(kind="done", ok=ok, cancelled=self._cancelled,
+                       hint="auth" if self._auth_failed else "")
         except Exception as e:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=False)
@@ -818,6 +845,8 @@ class Api:
         try:
             evt = json.loads(line)
         except ValueError:
+            if AUTH_FAIL_RE.search(line):
+                return self._report_auth_failure()
             self._emit(kind="meta", text=line)
             return False
         etype = evt.get("type")
@@ -844,12 +873,25 @@ class Api:
                         detail = inp.get("description") or ""
                     self._emit(kind="tool", text=f"{name}{': ' + detail if detail else ''}")
         elif etype == "result":
-            text = evt.get("result")
+            text = (evt.get("result") or "").strip()
             if text:
-                self._save_report(text.strip())
-                self._emit(kind="result", text=text.strip())
+                # is_error defaults True so a match with the field absent still
+                # counts, but a genuine summary that merely quotes the phrase
+                # (is_error explicitly False) does not trip it.
+                if AUTH_FAIL_RE.search(text) and evt.get("is_error", True):
+                    return self._report_auth_failure()
+                self._save_report(text)
+                self._emit(kind="result", text=text)
                 return True
         return False
+
+    def _report_auth_failure(self):
+        """Surface an expired-login failure as a clear, actionable message
+        rather than the raw CLI string, and skip saving it as a report."""
+        self._auth_failed = True
+        self._emit(kind="err", text="Claude Code sign-in has expired - details below.")
+        self._emit(kind="result", text=AUTH_HELP_MD)
+        return True
 
     def _save_report(self, text):
         """Persist the mission report, named after the channel (or master list)."""
