@@ -40,41 +40,11 @@ import sys
 import threading
 import time
 
-from fetch_channel import list_videos, log, normalize_channel_url
+from fetch_channel import (RETRY_WAITS, Cooldown, is_rate_limit, list_videos,
+                           log, normalize_channel_url)
 
 KEEP = ("id", "parent", "text", "author", "author_is_uploader",
         "like_count", "timestamp")
-RETRY_WAITS = (10, 30, 90)  # seconds, + jitter
-
-
-class Cooldown:
-    """Shared rate-limit brake: any worker can pause the whole pool."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._until = 0.0
-
-    def wait(self):
-        while True:
-            with self._lock:
-                remaining = self._until - time.time()
-            if remaining <= 0:
-                return
-            time.sleep(min(remaining, 1.0))
-
-    def trigger(self, secs):
-        """Extend the cooldown. Returns True if this call extended it."""
-        with self._lock:
-            target = time.time() + secs
-            if target > self._until:
-                self._until = target
-                return True
-            return False
-
-
-def is_rate_limit(err):
-    msg = str(err).lower()
-    return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
 
 def fetch_comments(video_url, max_comments):

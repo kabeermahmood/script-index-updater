@@ -24,11 +24,10 @@ import json
 import os
 import re
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fetch_channel import pick_track, vtt_to_text  # noqa: E402  (same folder)
+from fetch_channel import cache_root, pick_track, vtt_to_text  # noqa: E402
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 SENT_END = re.compile(r"[.!?][\"')\]]?$")
@@ -98,10 +97,6 @@ def safe_name(title, video_id):
     name = re.sub(r'[<>:"/\\|?*]', "", title or "").strip().rstrip(".")
     name = re.sub(r"\s+", " ", name)[:120].strip()
     return name or f"video-{video_id}"
-
-
-def cache_root():
-    return os.path.join(tempfile.gettempdir(), "index-scripts")
 
 
 def find_cached(video_id):
