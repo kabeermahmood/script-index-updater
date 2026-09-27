@@ -28,23 +28,47 @@ def is_match(a, b):
     return False
 
 
+def read_master_titles(master_docx):
+    """Rows already in the master list, as {tab, title, vehicle}.
+    Empty when the master does not exist yet. Shared with fetch_channel.py so
+    its "already indexed" pre-filter can never disagree with this comparison.
+
+    Raises ValueError on an unusable master. It must NOT exit the process:
+    fetch_channel.py calls this only as an optimisation and has to be able to
+    fall back to fetching everything.
+    """
+    if not os.path.exists(master_docx):
+        return []
+    import docx
+    d = docx.Document(master_docx)
+    if not d.tables:
+        raise ValueError("master docx has no table")
+    existing = []
+    for row in d.tables[0].rows[1:]:
+        cells = [c.text.strip() for c in row.cells]
+        if len(cells) >= 3 and cells[1] and cells[1] != "__TITLE__":
+            existing.append({"tab": cells[0], "title": cells[1], "vehicle": cells[2]})
+    return existing
+
+
+def already_indexed(title, existing_norms):
+    """True when `title` is a confident match for a master row - the same test
+    main() uses for the "matched" bucket, so a caller that skips these is
+    guaranteed not to turn them into "new"."""
+    tn = norm(title)
+    return any(is_match(tn, n_) for n_, _ in existing_norms)
+
+
 def main():
     tabs_json, master_docx, out_json = sys.argv[1], sys.argv[2], sys.argv[3]
     data = json.load(open(tabs_json, encoding="utf-8"))
     tabs = data["tabs"]
 
-    existing = []
-    if os.path.exists(master_docx):
-        import docx
-        d = docx.Document(master_docx)
-        if not d.tables:
-            print("ERROR: master docx has no table", file=sys.stderr)
-            sys.exit(1)
-        for row in d.tables[0].rows[1:]:
-            cells = [c.text.strip() for c in row.cells]
-            if len(cells) >= 3 and cells[1] and cells[1] != "__TITLE__":
-                existing.append({"tab": cells[0], "title": cells[1], "vehicle": cells[2]})
-
+    try:
+        existing = read_master_titles(master_docx)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     existing_norms = [(norm(e["title"]), e) for e in existing]
 
     matched, uncertain, new = [], [], []
