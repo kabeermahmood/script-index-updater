@@ -486,7 +486,10 @@
       <span class="chipbtn" onclick="preset('below')">Below average</span>
       <span class="chipbtn" onclick="preset('visible')">Select shown</span>
       <span class="chipbtn" onclick="preset('none')">Clear</span>
+      <span style="flex:1"></span>
+      <span class="chipbtn" id="loadviews" onclick="loadViewCounts()">⟳&nbsp;&nbsp;Load view counts</span>
     </div>
+    <div id="pviews" class="note" style="margin:0"></div>
     <div id="plist"></div>
     <div class="pfoot">
       <span id="pcount"></span>
@@ -625,22 +628,32 @@ let picked = [];             // the ticked ones, carried into the fetch
 let selected = new Set();    // ids ticked in the picker
 let vstats = null;           // view-count distribution of videoList
 let channelLabel = '';
+let viewsLoading = false;
 
+/* Videos whose view count we actually know. YouTube stopped returning
+   view_count for most of the channel listing, and treating an unknown count
+   as 0 made "min" and "median" pick arbitrary videos. */
+function withViews(list) {
+  return list.filter(v => typeof v.views === 'number' && isFinite(v.views));
+}
 function computeStats(list) {
-  const views = list.map(v => v.views || 0).sort((a, b) => a - b);
+  const pool = withViews(list);
+  const views = pool.map(v => v.views).sort((a, b) => a - b);
   const n = views.length;
-  if (!n) return null;
+  if (n < 2) return null;          // too little data to talk about a spread
   return {
     min: views[0],
     max: views[n - 1],
     mean: views.reduce((a, b) => a + b, 0) / n,
-    median: n % 2 ? views[(n - 1) / 2] : (views[n / 2 - 1] + views[n / 2]) / 2
+    median: n % 2 ? views[(n - 1) / 2] : (views[n / 2 - 1] + views[n / 2]) / 2,
+    known: n, total: list.length
   };
 }
 function nearest(list, target) {
-  return list.reduce((best, v) =>
-    Math.abs((v.views || 0) - target) < Math.abs((best.views || 0) - target) ? v : best,
-    list[0]);
+  const pool = withViews(list);
+  if (!pool.length) return null;
+  return pool.reduce((best, v) =>
+    Math.abs(v.views - target) < Math.abs(best.views - target) ? v : best, pool[0]);
 }
 function fmtViews(n) {
   if (n == null) return '—';
@@ -678,8 +691,36 @@ async function browseVideos() {
   channelLabel = res.channel || '';
   vstats = computeStats(videoList);
   $('ptitle').textContent = ((channelLabel || 'Channel') + ' — videos').toUpperCase();
-  preset('spread');            // default: max, mean, median and min views
+  if (vstats) preset('spread');   // default: max, mean, median and min views
+  else renderPicker();            // no counts yet: pick nothing rather than guess
   $('pfilter').focus();
+}
+
+async function loadViewCounts() {
+  const channel = $('channel').value.trim();
+  if (!channel || viewsLoading) return;
+  viewsLoading = true;
+  const btn = $('loadviews');
+  btn.textContent = 'Loading view counts…';
+  let res;
+  try {
+    res = await pywebview.api.load_view_counts(channel);
+  } catch (e) {
+    res = {error: 'View-count load failed: ' + (e && e.message ? e.message : e)};
+  }
+  viewsLoading = false;
+  btn.textContent = '⟳  Load view counts';
+  if (!res || res.error) {
+    log((res && res.error) || 'Could not load view counts.', 'err');
+    renderPicker();
+    return;
+  }
+  // keep the current ticks: the user may have selected before loading
+  const keep = new Set(selected);
+  videoList = res.videos || videoList;
+  vstats = computeStats(videoList);
+  selected = keep;
+  renderPicker();
 }
 
 function visibleRows() {
@@ -695,19 +736,26 @@ function visibleRows() {
   else rows.sort((a, b) => a.tab - b.tab);
   return rows;
 }
+const VIEW_PRESETS = ['spread', 'top10', 'bottom10', 'above', 'below'];
 function preset(kind) {
   if (!videoList.length) return;
   const s = vstats;
-  const byViews = [...videoList].sort((a, b) => (b.views || 0) - (a.views || 0));
+  if (VIEW_PRESETS.includes(kind) && !s) {
+    // ranking by views is meaningless until we actually have them
+    log('No view counts loaded yet — press "Load view counts" in the picker.', 'err');
+    return;
+  }
+  // only videos with a known count can be ranked by one
+  const byViews = withViews(videoList).sort((a, b) => b.views - a.views);
   selected.clear();
-  if (kind === 'spread' && s) {
+  if (kind === 'spread') {
     // a deliberate spread of the distribution: best, average, typical, worst
     [byViews[0], nearest(videoList, s.mean), nearest(videoList, s.median),
      byViews[byViews.length - 1]].forEach(v => v && selected.add(v.id));
   } else if (kind === 'top10') byViews.slice(0, 10).forEach(v => selected.add(v.id));
   else if (kind === 'bottom10') byViews.slice(-10).forEach(v => selected.add(v.id));
-  else if (kind === 'above' && s) videoList.filter(v => (v.views || 0) > s.mean).forEach(v => selected.add(v.id));
-  else if (kind === 'below' && s) videoList.filter(v => (v.views || 0) <= s.mean).forEach(v => selected.add(v.id));
+  else if (kind === 'above') byViews.filter(v => v.views > s.mean).forEach(v => selected.add(v.id));
+  else if (kind === 'below') byViews.filter(v => v.views <= s.mean).forEach(v => selected.add(v.id));
   else if (kind === 'visible') visibleRows().forEach(v => selected.add(v.id));
   renderPicker();
 }
@@ -718,8 +766,9 @@ function toggleVideo(id) {
 function renderPicker() {
   const rows = visibleRows();
   const s = vstats;
-  const meanId = s ? nearest(videoList, s.mean).id : null;
-  const medianId = s ? nearest(videoList, s.median).id : null;
+  const meanV = s ? nearest(videoList, s.mean) : null;
+  const medianV = s ? nearest(videoList, s.median) : null;
+  const meanId = meanV && meanV.id, medianId = medianV && medianV.id;
   const tagFor = v => {
     if (!s) return '';
     const t = v.views === s.max ? 'max' : v.views === s.min ? 'min'
@@ -738,6 +787,12 @@ function renderPicker() {
   $('pcount').textContent =
     `${selected.size} selected · ${rows.length} of ${videoList.length} shown` +
     (s ? ` · median ${fmtViews(Math.round(s.median))}, mean ${fmtViews(Math.round(s.mean))}` : '');
+  const known = withViews(videoList).length;
+  $('pviews').textContent = known === videoList.length
+    ? `View counts loaded for all ${known} videos.`
+    : `View counts known for ${known} of ${videoList.length} videos — YouTube no `
+      + `longer sends them with the listing. "Load view counts" fetches the rest `
+      + `(about 4s each, cached afterwards); the view filters and presets need them.`;
 }
 function useSelection() {
   picked = videoList.filter(v => selected.has(v.id));
@@ -839,6 +894,12 @@ function onEvent(e) {
   else if (e.kind === 'progress') setProgress(e.pct, e.label);
   else if (e.kind === 'master') $('master').value = e.path;
   else if (e.kind === 'output') { openPath = e.path; $('open-master').textContent = e.label || 'Open file'; }
+  else if (e.kind === 'viewprog') {
+    const el = $('pviews');
+    if (el) el.textContent = e.total
+      ? `Loading view counts… ${e.done}/${e.total} (about 4s each, cached afterwards)`
+      : (e.text || 'Loading view counts…');
+  }
   else if (e.kind === 'transcript') showTranscript(e);
   else if (e.kind === 'result') showResult(e.text);
   else if (e.kind === 'done') {

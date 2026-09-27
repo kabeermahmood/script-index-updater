@@ -175,6 +175,7 @@ class Api:
         self._master = ""
         self._report_name = ""
         self._auth_failed = False
+        self._views_proc = None
 
     # ---------- helpers ----------
     def _emit(self, **payload):
@@ -286,6 +287,52 @@ class Api:
             return {"error": f"Could not read the video list: {e}"}
         remember_settings(channel=channel)
         return data
+
+    def load_view_counts(self, channel):
+        """Collect the view counts the channel listing no longer carries.
+
+        One extraction per video, so this is opt-in and streams progress into
+        the picker. Results are cached, so it is paid once per channel and
+        later only for new uploads.
+        """
+        channel = (channel or "").strip().strip('"')
+        if not channel:
+            return {"error": "Enter a YouTube channel URL first."}
+        if importlib.util.find_spec("yt_dlp") is None:
+            return {"error": "Loading view counts needs yt-dlp. Run: pip install yt-dlp"}
+        out_dir = self._channel_dir(channel)
+        script = os.path.normpath(os.path.join(HERE, "..", "scripts",
+                                               "fetch_channel.py"))
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-u", script, channel, out_dir,
+                 "--list-only", "--with-views"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", creationflags=flags,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        except Exception as e:
+            return {"error": f"Could not start the view-count fetch: {e}"}
+        self._views_proc = proc
+        for line in proc.stdout:
+            line = line.rstrip()
+            m = re.match(r"\[(\d+)/(\d+)\]", line)
+            if m:
+                n, total = int(m.group(1)), int(m.group(2))
+                self._emit(kind="viewprog", done=n, total=total)
+            elif line.startswith("Fetching view counts"):
+                self._emit(kind="viewprog", done=0, total=0, text=line)
+        code = proc.wait()
+        self._views_proc = None
+        path = os.path.join(out_dir, "videos.json")
+        if code != 0 or not os.path.exists(path):
+            return {"error": "Could not load view counts - see the feed."}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError) as e:
+            return {"error": f"Could not read the video list: {e}"}
 
     def _tree(self):
         """psutil handles for the worker process and all of its children."""
