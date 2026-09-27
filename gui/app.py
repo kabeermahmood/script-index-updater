@@ -26,6 +26,12 @@ SKILL_MD = os.path.normpath(os.path.join(HERE, "..", "SKILL.md"))
 CONFIG = os.path.join(HERE, "config.json")
 ALLOWED_TOOLS = "Read,Write,Edit,Glob,Grep,Bash,Task,TodoWrite,Skill"
 
+# one source of truth for the cache location and the per-channel master name,
+# so the GUI and the scripts can never disagree about where things live
+sys.path.insert(0, os.path.normpath(os.path.join(HERE, "..", "scripts")))
+from fetch_channel import (cache_root, channel_cache_key,  # noqa: E402
+                           channel_master_path)
+
 
 def load_config():
     try:
@@ -716,8 +722,8 @@ class Api:
     # ---------- worker ----------
     @staticmethod
     def _channel_dir(url):
-        slug = hashlib.md5(url.lower().encode()).hexdigest()[:10]
-        return os.path.join(tempfile.gettempdir(), "index-scripts", f"channel-{slug}")
+        slug = hashlib.md5(channel_cache_key(url).encode()).hexdigest()[:10]
+        return os.path.join(cache_root(), f"channel-{slug}")
 
     def _run_job(self, claude, pdfs, master, include_angle, channel):
         """Stage 1: fetch channel transcripts (live per-video progress).
@@ -728,7 +734,8 @@ class Api:
             chan_tabs, chan_master = None, master
             if channel:
                 fetch_span = (0, 50) if pdfs else (0, 60)
-                if not self._fetch_channel(channel, fetch_span):
+                if not self._fetch_channel(channel, fetch_span,
+                                           master_dir=os.path.dirname(master) or "."):
                     self._emit(kind="done", ok=False, cancelled=self._cancelled)
                     return
                 chan_tabs = os.path.join(self._channel_dir(channel), "tabs.json")
@@ -739,9 +746,9 @@ class Api:
                     pass
                 if self._report_name:
                     # every channel gets its own index, named after the channel
-                    safe = re.sub(r'[<>:"/\\|?*]', "", self._report_name).strip()
-                    chan_master = os.path.join(os.path.dirname(master) or ".",
-                                               f"{safe} Script Index.docx")
+                    # (same helper the fetcher gated against, so they agree)
+                    chan_master = channel_master_path(
+                        os.path.dirname(master) or ".", self._report_name)
                     self._master = chan_master
                     self._emit(kind="meta", text=f"Channel index: {chan_master}")
                     self._emit(kind="master", path=chan_master)
@@ -776,11 +783,15 @@ class Api:
             self._emit(kind="err", text=f"ERROR: {e}")
             self._emit(kind="done", ok=False, cancelled=self._cancelled)
 
-    def _fetch_channel(self, url, span, max_videos=0):
+    def _fetch_channel(self, url, span, max_videos=0, master_dir=""):
         """Run fetch_channel.py, streaming its per-video progress to the UI."""
         out_dir = self._channel_dir(url)
         script = os.path.normpath(os.path.join(HERE, "..", "scripts", "fetch_channel.py"))
         cmd = [sys.executable, "-u", script, url, out_dir]
+        if master_dir:
+            # lets the fetcher skip videos already in the master instead of
+            # downloading every transcript and discarding most of them
+            cmd += ["--master-dir", master_dir]
         if max_videos:
             cmd += ["--max", str(max_videos)]
         self._emit(kind="progress", pct=span[0], label="Listing channel videos")
