@@ -106,6 +106,83 @@ def is_rate_limit(err):
     return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
 
+def load_view_cache(out_dir):
+    """Previously collected view counts for this channel, {video_id: int}."""
+    try:
+        with open(os.path.join(out_dir, "views.json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v for k, v in (data.get("views") or {}).items()
+                if isinstance(v, int)}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_view_cache(out_dir, views):
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "views.json"), "w", encoding="utf-8") as f:
+            json.dump({"views": views, "saved": time.time()}, f)
+    except OSError:
+        pass
+
+
+def collect_views(ydl_factory, videos, cached, out_dir, workers, delay):
+    """View count for every video that has none yet.
+
+    YouTube no longer returns view_count in the channel listing (4 of 81 on a
+    real channel), so each one costs a full extraction. They are cached, so a
+    channel pays this once and later runs only price new uploads.
+    """
+    missing = [v for v in videos
+               if v.get("views") is None and v["id"] not in cached]
+    if not missing:
+        log(f"View counts: all {len(videos)} already known")
+        return cached
+    log(f"Fetching view counts for {len(missing)} video(s) "
+        f"({len(cached)} already cached)")
+    cool = Cooldown()
+    local = threading.local()
+
+    def get_ydl():
+        y = getattr(local, "ydl", None)
+        if y is None:
+            y = ydl_factory({"quiet": True, "no_warnings": True,
+                             "skip_download": True})
+            local.ydl = y
+        return y
+
+    def one(v):
+        for attempt, base_wait in enumerate(RETRY_WAITS):
+            cool.wait()
+            try:
+                info = get_ydl().extract_info(v["url"], download=False)
+                time.sleep(delay)
+                return v["id"], info.get("view_count")
+            except Exception as e:
+                if not is_rate_limit(e):
+                    return v["id"], None
+                wait = base_wait + random.uniform(0, base_wait * 0.3)
+                if cool.trigger(wait):
+                    log(f"    rate limited by YouTube - pausing every worker "
+                        f"for {wait:.0f}s (attempt {attempt + 1}/"
+                        f"{len(RETRY_WAITS)})")
+                time.sleep(wait * 0.3)
+        return v["id"], None
+
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in concurrent.futures.as_completed(
+                [ex.submit(one, v) for v in missing]):
+            vid, count = fut.result()
+            done += 1
+            if count is not None:
+                cached[vid] = count
+            log(f"[{done}/{len(missing)}] views "
+                f"{format(count, ',') if count is not None else 'unavailable'}")
+    save_view_cache(out_dir, cached)
+    return cached
+
+
 def normalize_channel_url(url):
     url = url.strip().strip('"').strip("'")
     if not re.match(r"^https?://", url, re.I):
@@ -203,6 +280,11 @@ def main():
                          "master is resolved once the channel name is known")
     ap.add_argument("--workers", type=int, default=3,
                     help="parallel fetch workers (default 3)")
+    ap.add_argument("--with-views", action="store_true",
+                    help="with --list-only, also collect each video's view "
+                         "count. YouTube stopped putting these in the channel "
+                         "listing, so they cost one request per video; results "
+                         "are cached and only missing ones are fetched.")
     args = ap.parse_args()
 
     try:
@@ -229,11 +311,21 @@ def main():
         # Enumeration only - what the GUI's single-video picker runs. "cached"
         # covers both a previous channel run and a previous single fetch.
         vcache = os.path.join(cache_root(), "videos")
+        views = load_view_cache(args.out_dir)
+        if args.with_views:
+            views = collect_views(YoutubeDL, videos, views, args.out_dir,
+                                  max(1, args.workers), args.delay)
         listing = [{"tab": n, "id": v["id"], "title": v["title"], "url": v["url"],
-                    "views": v.get("views"), "duration": v.get("duration"),
+                    # the listing itself rarely carries view_count any more, so
+                    # fall back to whatever --with-views has cached
+                    "views": v.get("views") if v.get("views") is not None
+                             else views.get(v["id"]),
+                    "duration": v.get("duration"),
                     "cached": (os.path.exists(os.path.join(tdir, f"{v['id']}.txt"))
                                or os.path.exists(os.path.join(vcache, f"{v['id']}.txt")))}
                    for n, v in enumerate(videos, 1)]
+        known_views = sum(1 for e in listing if e["views"] is not None)
+        log(f"VIEWS: {known_views}/{len(listing)}")
         videos_json = os.path.join(args.out_dir, "videos.json")
         with open(videos_json, "w", encoding="utf-8") as f:
             json.dump({"channel": channel, "url": url, "videos": listing}, f,
