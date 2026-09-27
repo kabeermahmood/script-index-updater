@@ -22,20 +22,88 @@ separates network fetches to stay under YouTube's rate limits.
 Requires: pip install yt-dlp
 """
 import argparse
+import concurrent.futures
 import json
 import os
+import random
 import re
 import sys
-import tempfile
+import threading
 import time
 
 SNIPPET_CHARS = 1200
 TAG_RE = re.compile(r"<[^>]+>")
 TS_LINE = re.compile(r"^\d{2}:\d{2}:\d{2}[.,]\d{3}\s+-->")
+RETRY_WAITS = (10, 30, 90)  # seconds, + jitter
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def cache_root():
+    """Where transcripts are cached between runs.
+
+    Deliberately NOT the system temp dir: Windows Storage Sense and Disk
+    Cleanup purge %TEMP%, which silently threw away every cached transcript
+    and made each re-run download the whole channel again.
+    """
+    override = os.environ.get("INDEX_SCRIPTS_CACHE")
+    if override:
+        return override
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else None
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "ScriptIndexUpdater", "cache")
+
+
+def channel_cache_key(url):
+    """Stable cache identity for a channel. The same channel typed any of its
+    usual ways ("@Chan", "@Chan/", ".../videos", with or without scheme or
+    www.) must land in ONE cache directory - hashing the raw string orphaned
+    the cache and silently re-downloaded the whole channel."""
+    u = normalize_channel_url(url).lower()
+    u = re.sub(r"^https?://", "", u)
+    return re.sub(r"^www\.", "", u)
+
+
+def channel_master_path(master_dir, channel_name):
+    """`<dir>/<Channel> Script Index.docx` - the per-channel master list.
+    Shared with the GUI so both agree on the path before anything is fetched."""
+    safe = re.sub(r'[<>:"/\\|?*]', "", channel_name or "").strip()
+    if not safe:
+        return ""
+    return os.path.join(master_dir or ".", f"{safe} Script Index.docx")
+
+
+class Cooldown:
+    """Shared rate-limit brake: any worker can pause the whole pool."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._until = 0.0
+
+    def wait(self):
+        while True:
+            with self._lock:
+                remaining = self._until - time.time()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 1.0))
+
+    def trigger(self, secs):
+        """Extend the cooldown. Returns True if this call extended it."""
+        with self._lock:
+            target = time.time() + secs
+            if target > self._until:
+                self._until = target
+                return True
+            return False
+
+
+def is_rate_limit(err):
+    msg = str(err).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
 
 
 def normalize_channel_url(url):
@@ -127,6 +195,14 @@ def main():
     ap.add_argument("--list-only", action="store_true",
                     help="just enumerate the channel's videos into videos.json; "
                          "download no transcripts")
+    ap.add_argument("--master", default="",
+                    help="master .docx: videos already listed in it are not "
+                         "fetched at all")
+    ap.add_argument("--master-dir", default="",
+                    help="folder holding '<Channel> Script Index.docx'; the "
+                         "master is resolved once the channel name is known")
+    ap.add_argument("--workers", type=int, default=3,
+                    help="parallel fetch workers (default 3)")
     args = ap.parse_args()
 
     try:
@@ -152,7 +228,7 @@ def main():
     if args.list_only:
         # Enumeration only - what the GUI's single-video picker runs. "cached"
         # covers both a previous channel run and a previous single fetch.
-        vcache = os.path.join(tempfile.gettempdir(), "index-scripts", "videos")
+        vcache = os.path.join(cache_root(), "videos")
         listing = [{"tab": n, "id": v["id"], "title": v["title"], "url": v["url"],
                     "views": v.get("views"), "duration": v.get("duration"),
                     "cached": (os.path.exists(os.path.join(tdir, f"{v['id']}.txt"))
@@ -171,53 +247,137 @@ def main():
         numbered = numbered[-args.max:]
         log(f"--max {args.max}: processing the {len(numbered)} most recent video(s)")
 
+    # --- skip anything the master already lists -----------------------------
+    # The match is decided by TITLE alone (compare.py does the same), and the
+    # titles came free with the listing above - so there is no reason to
+    # download a transcript for a video that is already indexed.
+    master = args.master
+    if not master and args.master_dir:
+        master = channel_master_path(args.master_dir, channel)
+    known_norms = []
+    if master:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from compare import already_indexed, norm, read_master_titles
+            existing = read_master_titles(master)
+            known_norms = [(norm(e["title"]), e) for e in existing]
+            log(f"Master list holds {len(existing)} entry(s): {master}")
+        except Exception as e:
+            log(f"Could not read the master list ({e}) - fetching every video")
+            known_norms = []
+
     tabs, anomalies = [], []
-    fetched = cached = skipped = 0
+    todo, known = [], 0
     for n, v in numbered:
+        if known_norms and already_indexed(v["title"], known_norms):
+            known += 1
+            # Still listed so compare.py counts it as "matched" and the run
+            # report stays honest - it just carries no transcript.
+            tabs.append({"tab": n, "title": v["title"], "vic": "", "snippet": "",
+                         "video_id": v["id"], "url": v["url"],
+                         "transcript_file": "", "already_indexed": True})
+        else:
+            todo.append((n, v))
+    if known:
+        log(f"{known} video(s) already in the master list - skipping their transcripts")
+    log(f"{len(todo)} video(s) need a transcript")
+
+    fetched = cached = skipped = 0
+    cool = Cooldown()
+    local = threading.local()
+
+    def get_ydl():
+        y = getattr(local, "ydl", None)
+        if y is None:  # one extractor per worker: not shared across threads
+            y = YoutubeDL({"quiet": True, "no_warnings": True,
+                           "skip_download": True})
+            local.ydl = y
+        return y
+
+    def fetch_one(item):
+        """Returns (n, video, text, err, source)."""
+        n, v = item
         txt_path = os.path.join(tdir, f"{v['id']}.txt")
         none_path = os.path.join(tdir, f"{v['id']}.none")
-        label = f"[{n}/{len(videos)}] {v['title'][:70]}"
-        text = None
         if os.path.exists(txt_path):
-            with open(txt_path, encoding="utf-8") as f:
-                text = f.read()
-            cached += 1
-            log(f"{label} - cached")
-        elif os.path.exists(none_path):
-            skipped += 1
-            anomalies.append(f"Video {n} \"{v['title']}\" ({v['id']}): "
-                             "no captions available - skipped")
-            log(f"{label} - no captions (cached marker), skipped")
-        else:
             try:
-                text, err = fetch_transcript(ydl, v, args.lang)
+                with open(txt_path, encoding="utf-8") as f:
+                    return n, v, f.read(), None, "cached"
+            except OSError:
+                pass
+        if os.path.exists(none_path):
+            return n, v, None, "no captions available", "failed"
+        text = err = None
+        for attempt, base_wait in enumerate(RETRY_WAITS):
+            cool.wait()
+            try:
+                text, err = fetch_transcript(get_ydl(), v, args.lang)
             except Exception as e:
                 text, err = None, f"fetch failed: {e}"
             if text:
-                with open(txt_path, "w", encoding="utf-8") as f:
-                    f.write(text)
-                fetched += 1
-                log(f"{label} - transcript saved ({len(text):,} chars)")
-            else:
-                skipped += 1
-                if "no captions" in (err or ""):
-                    with open(none_path, "w", encoding="utf-8") as f:
-                        f.write(err)
-                anomalies.append(f"Video {n} \"{v['title']}\" ({v['id']}): {err} - skipped")
-                log(f"{label} - {err}, skipped")
-            time.sleep(args.delay)
-        if text:
-            snippet = re.sub(r"\s+", " ", text[:SNIPPET_CHARS * 2]).strip()[:SNIPPET_CHARS]
-            tabs.append({"tab": n, "title": v["title"], "vic": "",
-                         "snippet": snippet, "video_id": v["id"], "url": v["url"],
-                         "transcript_file": os.path.abspath(txt_path)})
+                try:
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                except OSError:
+                    pass
+                time.sleep(args.delay)  # stay polite after a real request
+                return n, v, text, None, "fetched"
+            if not is_rate_limit(err):
+                break
+            wait = base_wait + random.uniform(0, base_wait * 0.3)
+            if cool.trigger(wait):
+                log(f"    rate limited by YouTube - pausing every worker for "
+                    f"{wait:.0f}s (attempt {attempt + 1}/{len(RETRY_WAITS)})")
+            time.sleep(wait * 0.3)
+        # a 429 gets no .none marker, so the next run retries it
+        if "no captions" in (err or ""):
+            try:
+                with open(none_path, "w", encoding="utf-8") as f:
+                    f.write(err)
+            except OSError:
+                pass
+        time.sleep(args.delay)
+        return n, v, None, err, "failed"
+
+    got, done_n, total = [], 0, len(todo)
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, args.workers)) as ex:
+            for fut in concurrent.futures.as_completed(
+                    [ex.submit(fetch_one, it) for it in todo]):
+                n, v, text, err, source = fut.result()
+                done_n += 1
+                label = f"[{done_n}/{total}] {v['title'][:70]}"
+                if source == "cached":
+                    cached += 1
+                    log(f"{label} - cached")
+                elif source == "fetched":
+                    fetched += 1
+                    log(f"{label} - transcript saved ({len(text):,} chars)")
+                else:
+                    skipped += 1
+                    anomalies.append((n, f"Video {n} \"{v['title']}\" "
+                                         f"({v['id']}): {err} - skipped"))
+                    log(f"{label} - {err}, skipped")
+                if text:
+                    got.append((n, v, text))
+
+    for n, v, text in got:
+        snippet = re.sub(r"\s+", " ", text[:SNIPPET_CHARS * 2]).strip()[:SNIPPET_CHARS]
+        tabs.append({"tab": n, "title": v["title"], "vic": "",
+                     "snippet": snippet, "video_id": v["id"], "url": v["url"],
+                     "transcript_file": os.path.abspath(
+                         os.path.join(tdir, f"{v['id']}.txt"))})
+    # workers finish out of order; restore upload order for everything below
+    tabs.sort(key=lambda t: t["tab"])
+    anomalies = [msg for _, msg in sorted(anomalies)]
 
     out = {"channel": channel, "url": url, "tabs": tabs, "anomalies": anomalies}
     tabs_json = os.path.join(args.out_dir, "tabs.json")
     with open(tabs_json, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1, ensure_ascii=False)
-    log(f"\n{len(tabs)} transcript(s) ready ({fetched} fetched, {cached} cached, "
-        f"{skipped} without captions) -> {tabs_json}")
+    log(f"\n{len(tabs)} tab(s) ready ({fetched} fetched, {cached} cached, "
+        f"{known} already indexed, {skipped} without captions) -> {tabs_json}")
 
 
 if __name__ == "__main__":
