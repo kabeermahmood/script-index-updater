@@ -22,12 +22,14 @@ import argparse
 import glob
 import json
 import os
+import random
 import re
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fetch_channel import cache_root, pick_track, vtt_to_text  # noqa: E402
+from fetch_channel import (RETRY_WAITS, Cooldown,  # noqa: E402
+                           cache_root, is_rate_limit, pick_track, vtt_to_text)
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 SENT_END = re.compile(r"[.!?][\"')\]]?$")
@@ -146,7 +148,8 @@ def fetch_one(ydl, url, lang):
     return title, text, kind, None
 
 
-def resolve_one(ydl, ref, lang, vcache, raw_mode=False, no_cache=False):
+def resolve_one(ydl, ref, lang, vcache, raw_mode=False, no_cache=False,
+                cool=None):
     """Fetch (or reuse from cache) one video's transcript.
     Returns a record dict, or one carrying "error"."""
     url, vid = normalize_video_url(ref.get("url") or ref.get("id") or "")
@@ -165,11 +168,23 @@ def resolve_one(ydl, ref, lang, vcache, raw_mode=False, no_cache=False):
         except OSError:
             raw = None
     if raw is None:
-        try:
-            fetched_title, raw, kind, err = fetch_one(ydl, url, lang)
-        except Exception as e:
-            return {"error": f"fetch failed: {e}", "title": title,
-                    "id": vid, "url": url}
+        # A 429 means "slow down", not "give up": without this the video was
+        # reported as an anomaly and silently left out of the transcript.
+        cool = cool or Cooldown()
+        fetched_title, err = "", None
+        for attempt, base_wait in enumerate(RETRY_WAITS):
+            cool.wait()
+            try:
+                fetched_title, raw, kind, err = fetch_one(ydl, url, lang)
+            except Exception as e:
+                fetched_title, raw, kind, err = "", None, "", f"fetch failed: {e}"
+            if raw or not is_rate_limit(err):
+                break
+            wait = base_wait + random.uniform(0, base_wait * 0.3)
+            cool.trigger(wait)
+            log(f"    rate limited by YouTube - waiting {wait:.0f}s "
+                f"(attempt {attempt + 1}/{len(RETRY_WAITS)})")
+            time.sleep(wait * 0.3)
         if not raw:
             return {"error": err, "title": title or fetched_title,
                     "id": vid, "url": url}
@@ -249,13 +264,16 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     ydl = YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True})
 
+    # one brake for the whole batch: a 429 on video 2 also holds back video 3
+    cool = Cooldown()
     results, failures = [], []
     for n, ref in enumerate(refs, 1):
         if not isinstance(ref, dict):
             ref = {"url": str(ref)}
         shown = (ref.get("title") or ref.get("url") or ref.get("id") or "")[:70]
         log(f"[{n}/{len(refs)}] {shown}")
-        rec = resolve_one(ydl, ref, args.lang, vcache, args.raw, args.no_cache)
+        rec = resolve_one(ydl, ref, args.lang, vcache, args.raw, args.no_cache,
+                          cool)
         if rec.get("error"):
             failures.append(rec)
             log(f"    skipped - {rec['error']}")
