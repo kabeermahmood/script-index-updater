@@ -212,13 +212,27 @@ class Api:
 
     def open_path(self, p):
         p = (p or "").strip().strip('"')
-        if os.path.exists(p):
+        if not os.path.exists(p):
+            return
+        if os.name == "nt":
             os.startfile(p)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p])
 
     def copy_text(self, text):
         """Put text on the clipboard. Done here rather than in JS because
         navigator.clipboard is unavailable on WebView2's file:// origin."""
-        if os.name != "nt" or not text:
+        if not text:
+            return False
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+                return True
+            except (OSError, subprocess.CalledProcessError):
+                return False
+        if os.name != "nt":
             return False
         try:
             import ctypes

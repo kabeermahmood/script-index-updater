@@ -72,7 +72,8 @@ The deterministic steps (transcript fetching, parsing, deduplication, document s
 ├── gui/
 │   ├── app.py                # Desktop app backend (pywebview + headless Claude Code)
 │   └── index.html            # The UI — single-file HTML/CSS/JS, zero frameworks
-└── launcher.bat              # Double-click to launch; drag PDFs onto it to pre-load them
+├── launcher.bat              # Windows: double-click to launch; drag PDFs onto it to pre-load them
+└── launcher.command          # macOS: double-click in Finder to launch
 ```
 
 ## Requirements
@@ -92,6 +93,8 @@ pip install -r requirements.txt
 ```
 
 Optionally, send `launcher.bat` to your desktop as a shortcut.
+
+**macOS:** use `python3 -m pip install -r requirements.txt`, then double-click `launcher.command` in Finder (pywebview uses the built-in WebKit, nothing else to install). The first time, macOS may block it as an unidentified script: right-click it → **Open** → **Open**. If it says it has no permission to run, run `chmod +x launcher.command` once.
 
 ## Usage
 
